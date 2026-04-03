@@ -25,6 +25,16 @@ type CityExperienceProps = {
   newsItems: NewsItem[];
 };
 
+/** Palavras-chave que ativam a LIA */
+const WAKE_WORDS = ["lia", "lia,", "ei lia", "hey lia", "olá lia", "ola lia", "ei, lia"];
+
+function isWakeWord(text: string): boolean {
+  const norm = text.toLowerCase().trim();
+  return WAKE_WORDS.some((w) => norm === w || norm.startsWith(w + " ") || norm.endsWith(" " + w));
+}
+
+type ListenMode = "wake" | "command";
+
 function orbStateFromVoice(
   voiceListening: boolean,
   talking: boolean
@@ -50,9 +60,10 @@ export function CityExperience({ tenant, newsItems }: CityExperienceProps) {
   const [playing, setPlaying] = useState(false);
   const [reflectionUrl, setReflectionUrl] = useState<string | null>(null);
   const [captionText, setCaptionText] = useState(
-    `Olá, sou a LIA. Atualizações oficiais de ${tenant.name}. Toque em “Ativar microfone” e fale o que precisa.`
+    `Olá, sou a LIA. Atualizações oficiais de ${tenant.name}. Toque em "Ativar microfone" e fale o que precisa.`
   );
   const [micStarted, setMicStarted] = useState(false);
+  const [listenMode, setListenMode] = useState<ListenMode>("wake");
   const lastPickRef = useRef<number>(0);
   const { playOne, playParts, speak } = useNewsPlayback();
 
@@ -64,18 +75,18 @@ export function CityExperience({ tenant, newsItems }: CityExperienceProps) {
 
   const endPlayback = useCallback(() => {
     setPlaying(false);
-    setCaptionText(
-      `Peça as últimas notícias, um tema — por exemplo esportes — ou ${CATEGORY_LABELS.saude}, ${CATEGORY_LABELS.obras} ou ${CATEGORY_LABELS.educacao}.`
-    );
+    setListenMode("wake");
+    setCaptionText(`Diga "LIA" para fazer outra pergunta.`);
   }, []);
 
-  const handleUtterance = useCallback(
+  const processCommand = useCallback(
     (text: string) => {
       const now = Date.now();
       if (now - lastPickRef.current < 900) return;
       lastPickRef.current = now;
 
       cancelRobotSpeech();
+      setListenMode("wake");
 
       const intent = parseVoiceIntent(text);
 
@@ -132,7 +143,7 @@ export function CityExperience({ tenant, newsItems }: CityExperienceProps) {
         const found = filterNewsByTopic(newsItems, intent.query);
         if (!found.length) {
           setPlaying(true);
-          setCaptionText(`Nada encontrado sobre “${intent.query}”.`);
+          setCaptionText(`Nada encontrado sobre "${intent.query}".`);
           speak(
             `Não encontrei notícias sobre ${intent.query}. Tente outras palavras.`,
             endPlayback
@@ -169,10 +180,32 @@ export function CityExperience({ tenant, newsItems }: CityExperienceProps) {
     [endPlayback, newsItems, playOne, playParts, speak, tenant.slug]
   );
 
-  const voiceEnabled = !playing && micStarted;
+  const handleUtterance = useCallback(
+    (text: string) => {
+      if (listenMode === "wake") {
+        if (isWakeWord(text)) {
+          setListenMode("command");
+          setCaptionText("Pode falar — estou ouvindo.");
+        }
+        // Palavra errada: ignora, microfone reinicia automaticamente
+        return;
+      }
+
+      // listenMode === "command"
+      processCommand(text);
+    },
+    [listenMode, processCommand]
+  );
+
+  // O microfone fica habilitado quando o usuário ativou e a LIA não está falando.
+  // Em modo wake: oneShot=false → contínuo (reinicia até ouvir "LIA")
+  // Em modo command: oneShot=true → disparo único (fecha após capturar o pedido)
+  const voiceEnabled = micStarted && !playing;
+  const oneShot = listenMode === "command";
 
   const { status: voiceStatus } = useVoiceUtterance({
     enabled: voiceEnabled,
+    oneShot,
     onUtterance: handleUtterance,
   });
 
@@ -181,10 +214,12 @@ export function CityExperience({ tenant, newsItems }: CityExperienceProps) {
 
   const onActivateMic = useCallback(() => {
     setMicStarted(true);
-    setCaptionText(
-      `Olá. Peça as últimas notícias, fale um tema como esportes, ou diga ${CATEGORY_LABELS.saude}, ${CATEGORY_LABELS.obras} ou ${CATEGORY_LABELS.educacao}.`
-    );
+    setCaptionText(`Diga "LIA" para começar.`);
   }, []);
+
+  const wakeHint = listenMode === "wake"
+    ? 'Aguardando "LIA"…'
+    : "Escutando seu pedido…";
 
   return (
     <div className="flex h-[100dvh] flex-col overflow-hidden bg-black text-white selection:bg-white/20">
@@ -243,14 +278,13 @@ export function CityExperience({ tenant, newsItems }: CityExperienceProps) {
           </div>
         ) : (
           <p className="pointer-events-none text-center text-[10px] leading-relaxed text-white/42 sm:text-[11px]">
-            Voz · Últimas notícias · temas (ex.: esportes) · Saúde, Obras, Educação ·{" "}
             {voiceStatus === "unsupported"
-              ? "Use Chrome ou Edge."
-              : listening
-                ? "Escutando…"
-                : playing
-                  ? "LIA está falando…"
-                  : "Pronto para ouvir"}
+              ? "Reconhecimento de voz não disponível. Use Chrome ou Edge."
+              : playing
+                ? "LIA está falando…"
+                : listening
+                  ? wakeHint
+                  : ""}
           </p>
         )}
       </footer>
