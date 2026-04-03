@@ -16,7 +16,7 @@ import {
 import { speechText } from "@/lib/newsSpeech";
 import { useVoiceUtterance } from "@/hooks/useVoiceCategory";
 import { useNewsPlayback } from "@/hooks/useNewsPlayback";
-import { cancelRobotSpeech, speakRobot } from "@/lib/robotSpeech";
+import { cancelRobotSpeech } from "@/lib/robotSpeech";
 import { Captions } from "./Captions";
 import { Orb, type OrbState } from "./Orb";
 
@@ -54,7 +54,7 @@ export function CityExperience({ tenant, newsItems }: CityExperienceProps) {
   );
   const [micStarted, setMicStarted] = useState(false);
   const lastPickRef = useRef<number>(0);
-  const { playOne, playParts } = useNewsPlayback();
+  const { playOne, playParts, speak } = useNewsPlayback();
 
   useEffect(() => {
     return () => {
@@ -84,7 +84,7 @@ export function CityExperience({ tenant, newsItems }: CityExperienceProps) {
         setCaptionText(
           "Não entendi. Diga, por exemplo: últimas notícias, as três mais recentes, ou notícias sobre esportes."
         );
-        speakRobot(
+        speak(
           "Não entendi. Experimente pedir as últimas notícias, ou um tema como esportes.",
           endPlayback
         );
@@ -111,7 +111,7 @@ export function CityExperience({ tenant, newsItems }: CityExperienceProps) {
         const sorted = sortNewsByRecency(newsItems);
         const slice = sorted.slice(0, intent.count);
         if (!slice.length) {
-          speakRobot("Não há notícias disponíveis no momento.", endPlayback);
+          speak("Não há notícias disponíveis no momento.", endPlayback);
           return;
         }
 
@@ -133,7 +133,7 @@ export function CityExperience({ tenant, newsItems }: CityExperienceProps) {
         if (!found.length) {
           setPlaying(true);
           setCaptionText(`Nada encontrado sobre “${intent.query}”.`);
-          speakRobot(
+          speak(
             `Não encontrei notícias sobre ${intent.query}. Tente outras palavras.`,
             endPlayback
           );
@@ -166,7 +166,7 @@ export function CityExperience({ tenant, newsItems }: CityExperienceProps) {
         playParts([intro, ...parts], endPlayback);
       }
     },
-    [endPlayback, newsItems, playOne, playParts, tenant.slug]
+    [endPlayback, newsItems, playOne, playParts, speak, tenant.slug]
   );
 
   const voiceEnabled = !playing && micStarted;
