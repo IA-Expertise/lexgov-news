@@ -3,8 +3,6 @@ import { textToSpeechMp3, isElevenLabsConfigured } from "@/lib/elevenlabs";
 import { savePublicMp3 } from "@/lib/ttsStorage";
 import { buildTop3Script } from "@/lib/top3Script";
 
-export { buildTop3Script } from "@/lib/top3Script";
-
 export const TOP3_AUDIO_ID = "top3";
 
 /**
