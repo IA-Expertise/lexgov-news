@@ -21,6 +21,16 @@ export function matchCategoryFromText(raw: string): NewsCategory | null {
   return null;
 }
 
+/** Temas que não são categoria do portal mas existem como busca (esportes, cultura) */
+function matchFreeTopicFromText(raw: string): string | null {
+  const t = stripAccents(raw.toLowerCase());
+  if (/\b(esportes?|futebol|futsal|volei|vôlei|atletas?|campeonato)\b/.test(t))
+    return "esportes";
+  if (/\b(cultura|cultural|teatro|cinema|musica|música)\b/.test(t))
+    return "cultura";
+  return null;
+}
+
 const NUMBER_WORDS: Record<string, number> = {
   uma: 1,
   um: 1,
@@ -64,6 +74,54 @@ const SPORTS_TERMS = [
   "voleibol",
 ];
 
+/** Palavras ignoradas na busca por voz (evita exigir "notícias" no título) */
+const SEARCH_STOPWORDS = new Set([
+  "de",
+  "da",
+  "do",
+  "das",
+  "dos",
+  "a",
+  "o",
+  "as",
+  "os",
+  "um",
+  "uma",
+  "uns",
+  "umas",
+  "no",
+  "na",
+  "nos",
+  "nas",
+  "ao",
+  "aos",
+  "à",
+  "às",
+  "com",
+  "sem",
+  "por",
+  "para",
+  "pra",
+  "sobre",
+  "que",
+  "tem",
+  "quero",
+  "ver",
+  "me",
+  "mais",
+  "como",
+  "noticia",
+  "noticias",
+  "notícia",
+  "notícias",
+  "ultima",
+  "ultimas",
+  "última",
+  "últimas",
+  "alguma",
+  "algumas",
+]);
+
 /** Tema → termos para busca ampla (OR) no título/resumo */
 const TOPIC_SYNONYMS: Record<string, string[]> = {
   esporte: SPORTS_TERMS,
@@ -104,14 +162,28 @@ export function parseVoiceIntent(raw: string): VoiceIntent {
   }
 
   const oneWord = t.replace(/[.,!?]+$/g, "").trim();
-  if (/^(esportes?|futebol|cultura|saude|educacao|obras)$/.test(oneWord)) {
-    return { kind: "search", query: oneWord };
+  if (/^(esportes?|futebol|cultura|saude|saúde|educacao|educação|obras)$/.test(oneWord)) {
+    const q =
+      oneWord === "saúde" || oneWord === "saude"
+        ? "saude"
+        : oneWord === "educação" || oneWord === "educacao"
+          ? "educacao"
+          : oneWord;
+    if (q === "esportes" || q === "futebol") return { kind: "search", query: "esportes" };
+    if (q === "cultura") return { kind: "search", query: "cultura" };
+    if (q === "saude" || q === "educacao" || q === "obras") {
+      return { kind: "category", category: q as NewsCategory };
+    }
+    return { kind: "search", query: q };
   }
+
+  const freeTopic = matchFreeTopicFromText(t);
+  if (freeTopic) return { kind: "search", query: freeTopic };
 
   const cat = matchCategoryFromText(t);
   if (cat) return { kind: "category", category: cat };
 
-  if (t.length >= 4 && !/^(oi|ola|hey|ok)$/.test(t)) {
+  if (t.length >= 3 && !/^(oi|ola|hey|ok)$/.test(t)) {
     return { kind: "search", query: raw.trim() };
   }
 
@@ -126,6 +198,13 @@ export function sortNewsByRecency(items: NewsItem[]): NewsItem[] {
   });
 }
 
+function queryKeywords(qRaw: string): string[] {
+  return stripAccents(qRaw.toLowerCase())
+    .split(/\s+/)
+    .map((w) => w.replace(/[.,!?]+$/g, ""))
+    .filter((w) => w.length > 1 && !SEARCH_STOPWORDS.has(w));
+}
+
 export function filterNewsByTopic(items: NewsItem[], query: string): NewsItem[] {
   const qRaw = query.trim();
   if (!qRaw) return [];
@@ -136,7 +215,7 @@ export function filterNewsByTopic(items: NewsItem[], query: string): NewsItem[] 
   const first = stripAccents(qRaw.toLowerCase().split(/\s+/)[0] ?? "");
   const synonyms = TOPIC_SYNONYMS[first];
 
-  if (synonyms?.length && !qRaw.includes(" ")) {
+  if (synonyms?.length && !qRaw.trim().includes(" ")) {
     return items.filter((item) => {
       const hay = haystack(item);
       return synonyms.some((term) =>
@@ -145,14 +224,18 @@ export function filterNewsByTopic(items: NewsItem[], query: string): NewsItem[] 
     });
   }
 
-  const words = stripAccents(qRaw.toLowerCase())
-    .split(/\s+/)
-    .filter((w) => w.length > 1);
+  const words = queryKeywords(qRaw);
 
-  if (!words.length) return [];
+  if (!words.length) {
+    return items.filter((item) => {
+      const hay = haystack(item);
+      return hay.includes(stripAccents(qRaw.toLowerCase()));
+    });
+  }
 
+  /** Com várias palavras, basta qualquer termo relevante bater (mais tolerante à fala). */
   return items.filter((item) => {
     const hay = haystack(item);
-    return words.every((w) => hay.includes(w));
+    return words.some((w) => hay.includes(w));
   });
 }

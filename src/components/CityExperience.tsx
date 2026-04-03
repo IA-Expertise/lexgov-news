@@ -7,17 +7,15 @@ import type { TenantConfig } from "@/config/tenants";
 import { LEXGOV_BRAND_BLUE } from "@/config/tenants";
 import { CATEGORY_COLORS } from "@/lib/categories";
 import type { NewsItem, NewsCategory } from "@/mocks/news";
-import { getNewsByTenantAndCategory } from "@/mocks/news";
 import {
   filterNewsByTopic,
   parseVoiceIntent,
   sortNewsByRecency,
 } from "@/lib/voiceIntent";
-import { speechText } from "@/lib/newsSpeech";
+import { buildLiaIntroScript, LIA_WAIT_ACKNOWLEDGMENT } from "@/lib/liaIntro";
 import { useVoiceUtterance } from "@/hooks/useVoiceCategory";
 import { useNewsPlayback } from "@/hooks/useNewsPlayback";
 import { cancelRobotSpeech } from "@/lib/robotSpeech";
-import { buildTop3Script } from "@/lib/top3Script";
 import { Captions } from "./Captions";
 import { Orb, type OrbState } from "./Orb";
 
@@ -35,28 +33,18 @@ function orbStateFromVoice(
   return "idle";
 }
 
-function pickNewsForCategory(
-  tenantSlug: string,
-  category: NewsCategory,
-  newsItems: NewsItem[]
-): NewsItem | undefined {
-  return (
-    newsItems.find((n) => n.category === category) ??
-    getNewsByTenantAndCategory(tenantSlug, category)
-  );
-}
-
 export function CityExperience({ tenant, newsItems }: CityExperienceProps) {
   const [orbHue, setOrbHue] = useState<string>(LEXGOV_BRAND_BLUE);
   const [playing, setPlaying] = useState(false);
   const [reflectionUrl, setReflectionUrl] = useState<string | null>(null);
   const [captionText, setCaptionText] = useState(
-    `Olá, sou a LIA. Atualizações oficiais de ${tenant.name}. Toque em "Falar com a LIA" e diga sua pergunta.`
+    `Olá, sou a LIA. Atualizações oficiais de ${tenant.name}. Toque em "Falar com a LIA" para ouvir o que tenho e escolher um tema.`
   );
   /** Só enquanto true o reconhecimento fica ativo — um toque = uma pergunta (sem microfone sempre ligado). */
   const [sessionArmed, setSessionArmed] = useState(false);
   const lastPickRef = useRef<number>(0);
-  const { playOne, playUrl, playParts, speak } = useNewsPlayback();
+  const { playOne, playSequential, speak, cancelPlayback } =
+    useNewsPlayback(tenant.slug);
 
   useEffect(() => {
     return () => {
@@ -84,28 +72,35 @@ export function CityExperience({ tenant, newsItems }: CityExperienceProps) {
       if (intent.kind === "unknown") {
         setPlaying(true);
         setCaptionText(
-          "Não entendi. Diga, por exemplo: últimas notícias, as três mais recentes, ou notícias sobre esportes."
+          "Não entendi. Diga um tema: saúde, obras, educação, esportes, ou “últimas notícias”."
         );
         speak(
-          "Não entendi. Experimente pedir as últimas notícias, ou um tema como esportes.",
+          "Não entendi. Experimente dizer saúde, obras, educação, esportes, ou últimas notícias.",
           endPlayback
         );
         return;
       }
 
       if (intent.kind === "category") {
-        const item = pickNewsForCategory(
-          tenant.slug,
-          intent.category,
-          newsItems
+        const sorted = sortNewsByRecency(
+          newsItems.filter((n) => n.category === intent.category)
         );
-        if (!item) return;
+        const slice = sorted.slice(0, 3);
+        if (!slice.length) {
+          setPlaying(true);
+          speak(
+            `Não há notícias de ${intent.category} na base neste momento.`,
+            endPlayback
+          );
+          return;
+        }
 
+        const first = slice[0];
         setOrbHue(CATEGORY_COLORS[intent.category]);
-        setReflectionUrl(item.imageUrl);
+        setReflectionUrl(first.imageUrl);
         setPlaying(true);
-        setCaptionText(item.title);
-        playOne(item, endPlayback);
+        setCaptionText(slice.map((i) => i.title).join(" · "));
+        playSequential(slice, endPlayback);
         return;
       }
 
@@ -114,6 +109,7 @@ export function CityExperience({ tenant, newsItems }: CityExperienceProps) {
         const count = Math.min(intent.count, 3);
         const slice = sorted.slice(0, count);
         if (!slice.length) {
+          setPlaying(true);
           speak("Não há notícias disponíveis no momento.", endPlayback);
           return;
         }
@@ -122,10 +118,7 @@ export function CityExperience({ tenant, newsItems }: CityExperienceProps) {
         setReflectionUrl(slice[0].imageUrl);
         setPlaying(true);
         setCaptionText(slice.map((i) => i.title).join(" · "));
-
-        const fallbackText = buildTop3Script(slice.map((i) => i.title));
-        // Tenta o MP3 pré-gravado no ingest; se falhar, gera em tempo real
-        playUrl(`/audio/${tenant.slug}/top3.mp3`, fallbackText, endPlayback);
+        playSequential(slice, endPlayback);
         return;
       }
 
@@ -133,9 +126,9 @@ export function CityExperience({ tenant, newsItems }: CityExperienceProps) {
         const found = filterNewsByTopic(newsItems, intent.query);
         if (!found.length) {
           setPlaying(true);
-          setCaptionText(`Nada encontrado sobre "${intent.query}".`);
+          setCaptionText(`Nada encontrado sobre “${intent.query}”.`);
           speak(
-            `Não encontrei notícias sobre ${intent.query}. Tente outras palavras.`,
+            `Não encontrei notícias sobre ${intent.query} na base atual. Tente outro tema ou diga saúde, obras ou educação.`,
             endPlayback
           );
           return;
@@ -158,25 +151,26 @@ export function CityExperience({ tenant, newsItems }: CityExperienceProps) {
 
         const intro =
           found.length > slice.length
-            ? `Encontrei ${found.length} resultados. Aqui estão as ${slice.length} primeiras.`
-            : `Encontrei ${found.length} ${found.length === 2 ? "notícias" : "notícias"}.`;
+            ? `Encontrei ${found.length} resultados. Seguem as ${slice.length} primeiras.`
+            : `Encontrei ${found.length} notícias.`;
 
-        const parts = slice.map(
-          (item, i) => `Notícia ${i + 1}. ${speechText(item)}`
-        );
-        playParts([intro, ...parts], endPlayback);
+        speak(intro, () => playSequential(slice, endPlayback));
       }
     },
-    [endPlayback, newsItems, playOne, playParts, playUrl, speak, tenant.slug]
+    [endPlayback, newsItems, playOne, playSequential, speak]
   );
 
   const handleUtterance = useCallback(
     (text: string) => {
       setSessionArmed(false);
-      setCaptionText("Só um instante…");
-      processCommand(text);
+      cancelPlayback();
+      setPlaying(true);
+      setCaptionText(LIA_WAIT_ACKNOWLEDGMENT);
+      speak(LIA_WAIT_ACKNOWLEDGMENT, () => {
+        processCommand(text);
+      });
     },
-    [processCommand]
+    [cancelPlayback, processCommand, speak]
   );
 
   const handleListeningEnd = useCallback(
@@ -210,16 +204,25 @@ export function CityExperience({ tenant, newsItems }: CityExperienceProps) {
 
   const onArmSession = useCallback(() => {
     setSessionArmed(true);
-    setCaptionText("Estou ouvindo — fale sua pergunta.");
-  }, []);
+    setPlaying(true);
+    setCaptionText("Um momento…");
+    speak(buildLiaIntroScript(newsItems, tenant.name), () => {
+      setPlaying(false);
+      setCaptionText(
+        "Diga o tema: saúde, obras, educação, esportes, cultura, ou “últimas notícias”."
+      );
+    });
+  }, [newsItems, speak, tenant.name]);
 
   const onCancelListening = useCallback(() => {
+    cancelPlayback();
     stopListening();
     setSessionArmed(false);
+    setPlaying(false);
     setCaptionText(
       'Toque em "Falar com a LIA" quando quiser perguntar de novo.'
     );
-  }, [stopListening]);
+  }, [cancelPlayback, stopListening]);
 
   return (
     <div className="flex h-[100dvh] flex-col overflow-hidden bg-black text-white selection:bg-white/20">
