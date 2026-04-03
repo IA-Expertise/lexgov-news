@@ -6,6 +6,9 @@ const parser = new Parser({
   headers: {
     "User-Agent": "LexGov-News/1.0 (RSS ingestão municipal)",
   },
+  customFields: {
+    item: ["media:content", "media:thumbnail"],
+  },
 });
 
 function inferCategory(title: string, body: string): NewsCategory {
@@ -17,11 +20,37 @@ function inferCategory(title: string, body: string): NewsCategory {
   return "saude";
 }
 
+type MediaTag = { $?: { url?: string; medium?: string } };
+
+function mediaContentUrl(item: Parser.Item): string {
+  const r = item as Record<string, unknown>;
+  const raw = r["media:content"] ?? r["mediaContent"];
+  const pick = (node: unknown): string => {
+    if (!node || typeof node !== "object") return "";
+    const tag = node as MediaTag;
+    const u = tag.$?.url;
+    return typeof u === "string" && u.length > 0 ? u : "";
+  };
+  if (Array.isArray(raw)) {
+    for (const x of raw) {
+      const u = pick(x);
+      if (u) return u;
+    }
+    return "";
+  }
+  return pick(raw);
+}
+
 function firstImageFromItem(item: Parser.Item): string {
+  const fromMedia = mediaContentUrl(item);
+  if (fromMedia) return fromMedia;
+
   const enc = item.enclosure as { url?: string } | undefined;
   if (enc?.url && /\.(jpg|jpeg|png|webp|gif)/i.test(enc.url)) return enc.url;
-  const html = item.content ?? "";
-  const m = html.match(/src=["']([^"']+\.(jpg|jpeg|png|webp))["']/i);
+
+  const r = item as Record<string, unknown>;
+  const html = item.content ?? (r["content:encoded"] as string | undefined) ?? "";
+  const m = String(html).match(/src=["']([^"']+\.(jpg|jpeg|png|webp))["']/i);
   return m?.[1] ?? "";
 }
 

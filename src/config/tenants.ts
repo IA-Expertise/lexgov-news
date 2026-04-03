@@ -19,7 +19,8 @@ export const tenants: Record<string, TenantConfig> = {
     primaryColor: "#0047AB",
     secondaryColor: "#87CEEB",
     voiceId: "Nicole",
-    rssUrl: "https://louveira.sp.gov.br/rss.xml",
+    /** Feed rss.app filtrado — só notícias do portal da prefeitura (louveira.sp.gov.br) */
+    rssUrl: "https://rss.app/feeds/Td6Rdgydp13qn427.xml",
   },
   vinhedo: {
     id: "vinhedo",
