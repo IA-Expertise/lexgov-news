@@ -1,0 +1,12 @@
+# LexGov News — Replit (https://replit.com)
+# Após importar do GitHub: Run → o preview abre na Webview.
+
+run = "npm run dev"
+language = "nodejs"
+
+[nix]
+channel = "stable-24_05"
+
+[deployment]
+run = ["sh", "-c", "npm run build && npm run start"]
+build = ["sh", "-c", "npm install && npm run build"]
