@@ -203,6 +203,7 @@ export function CityExperience({ tenant, newsItems }: CityExperienceProps) {
   const orbVisualState = orbStateFromVoice(listening, playing);
 
   const onArmSession = useCallback(() => {
+    cancelPlayback();
     setSessionArmed(true);
     setPlaying(true);
     setCaptionText("Um momento…");
@@ -212,7 +213,7 @@ export function CityExperience({ tenant, newsItems }: CityExperienceProps) {
         "Diga o tema: saúde, obras, educação, esportes, cultura, ou “últimas notícias”."
       );
     });
-  }, [newsItems, speak, tenant.name]);
+  }, [cancelPlayback, newsItems, speak, tenant.name]);
 
   const onCancelListening = useCallback(() => {
     cancelPlayback();

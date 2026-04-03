@@ -34,97 +34,153 @@ async function ttsToBlob(
 export function useNewsPlayback(tenantSlug: string) {
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const blobUrlRef = useRef<string | null>(null);
+  /** Incrementa a cada nova reprodução; callbacks antigos de TTS/áudio são ignorados (evita voz dobrada). */
+  const playbackGenRef = useRef(0);
+
+  const stopHtmlAudio = useCallback(() => {
+    const a = audioRef.current;
+    if (a) {
+      try {
+        a.pause();
+        a.removeAttribute("src");
+        a.load();
+      } catch {
+        /* ignore */
+      }
+    }
+    audioRef.current = null;
+  }, []);
 
   const cleanup = useCallback(() => {
-    audioRef.current?.pause();
-    audioRef.current = null;
+    stopHtmlAudio();
     if (blobUrlRef.current) {
-      URL.revokeObjectURL(blobUrlRef.current);
+      try {
+        URL.revokeObjectURL(blobUrlRef.current);
+      } catch {
+        /* ignore */
+      }
       blobUrlRef.current = null;
     }
+  }, [stopHtmlAudio]);
+
+  const bumpPlaybackGeneration = useCallback(() => {
+    playbackGenRef.current += 1;
+    return playbackGenRef.current;
   }, []);
 
   const cancelPlayback = useCallback(() => {
+    bumpPlaybackGeneration();
     cleanup();
     cancelRobotSpeech();
-  }, [cleanup]);
+  }, [bumpPlaybackGeneration, cleanup]);
 
   useEffect(() => {
     return () => {
+      bumpPlaybackGeneration();
       cleanup();
       cancelRobotSpeech();
     };
-  }, [cleanup]);
+  }, [bumpPlaybackGeneration, cleanup]);
 
   const playBlobUrl = useCallback(
-    (blobUrl: string, onEnd: () => void) => {
+    (blobUrl: string, token: number, onEnd: () => void) => {
+      if (token !== playbackGenRef.current) {
+        try {
+          URL.revokeObjectURL(blobUrl);
+        } catch {
+          /* ignore */
+        }
+        return;
+      }
       const a = new Audio(blobUrl);
       audioRef.current = a;
-      a.onended = () => {
+      const done = () => {
+        if (token !== playbackGenRef.current) return;
         cleanup();
         onEnd();
       };
-      a.onerror = () => {
-        cleanup();
-        onEnd();
-      };
-      void a.play().catch(() => {
-        cleanup();
-        onEnd();
-      });
+      a.onended = () => done();
+      a.onerror = () => done();
+      void a.play().catch(() => done());
     },
     [cleanup]
   );
 
-  /** Reproduz um artigo: MP3 pré-gravado → ElevenLabs real-time → navegador */
-  const playOne = useCallback(
-    (item: NewsItem, onEnd: () => void) => {
+  /**
+   * Um artigo com token fixo (não incrementa geração).
+   * Usado por playOne e por playSequential com o mesmo token em toda a fila.
+   */
+  const playOneWithToken = useCallback(
+    (item: NewsItem, token: number, onEnd: () => void) => {
       cancelRobotSpeech();
       cleanup();
+
+      const finish = () => {
+        if (token === playbackGenRef.current) onEnd();
+      };
 
       const preGenUrl = item.audioUrl?.trim();
       if (preGenUrl) {
         const src = resolveAudioSrc(preGenUrl);
         const a = new Audio(src);
         audioRef.current = a;
+
+        const fallbackTts = () => {
+          if (token !== playbackGenRef.current) return;
+          stopHtmlAudio();
+          void ttsToBlob(speechText(item), tenantSlug).then((blobUrl) => {
+            if (token !== playbackGenRef.current) {
+              if (blobUrl) URL.revokeObjectURL(blobUrl);
+              return;
+            }
+            if (blobUrl) {
+              blobUrlRef.current = blobUrl;
+              playBlobUrl(blobUrl, token, finish);
+            } else speakRobot(speechText(item), finish);
+          });
+        };
+
         a.onended = () => {
-          audioRef.current = null;
-          onEnd();
+          if (token !== playbackGenRef.current) return;
+          stopHtmlAudio();
+          finish();
         };
         a.onerror = () => {
-          audioRef.current = null;
-          void ttsToBlob(speechText(item), tenantSlug).then((blobUrl) => {
-            if (blobUrl) {
-              blobUrlRef.current = blobUrl;
-              playBlobUrl(blobUrl, onEnd);
-            } else speakRobot(speechText(item), onEnd);
-          });
+          fallbackTts();
         };
         void a.play().catch(() => {
-          void ttsToBlob(speechText(item), tenantSlug).then((blobUrl) => {
-            if (blobUrl) {
-              blobUrlRef.current = blobUrl;
-              playBlobUrl(blobUrl, onEnd);
-            } else speakRobot(speechText(item), onEnd);
-          });
+          fallbackTts();
         });
         return;
       }
 
       const text = speechText(item);
       void ttsToBlob(text, tenantSlug).then((blobUrl) => {
+        if (token !== playbackGenRef.current) {
+          if (blobUrl) URL.revokeObjectURL(blobUrl);
+          return;
+        }
         if (blobUrl) {
           blobUrlRef.current = blobUrl;
-          playBlobUrl(blobUrl, onEnd);
-        } else speakRobot(text, onEnd);
+          playBlobUrl(blobUrl, token, finish);
+        } else speakRobot(text, finish);
       });
     },
-    [cleanup, playBlobUrl, tenantSlug]
+    [cleanup, playBlobUrl, stopHtmlAudio, tenantSlug]
+  );
+
+  /** Reproduz um artigo: MP3 pré-gravado → ElevenLabs real-time → navegador */
+  const playOne = useCallback(
+    (item: NewsItem, onEnd: () => void) => {
+      const token = bumpPlaybackGeneration();
+      playOneWithToken(item, token, onEnd);
+    },
+    [bumpPlaybackGeneration, playOneWithToken]
   );
 
   /**
    * Vários artigos em sequência — cada um usa o MP3 da notícia quando existir,
-   * alinhado aos títulos mostrados na tela.
+   * alinhado aos títulos mostrados na tela. Uma única geração de playback para não cortar o áudio.
    */
   const playSequential = useCallback(
     (items: NewsItem[], onEnd: () => void) => {
@@ -132,18 +188,20 @@ export function useNewsPlayback(tenantSlug: string) {
         onEnd();
         return;
       }
+      const token = bumpPlaybackGeneration();
       let i = 0;
       const next = () => {
+        if (token !== playbackGenRef.current) return;
         if (i >= items.length) {
           onEnd();
           return;
         }
         const item = items[i++];
-        playOne(item, next);
+        playOneWithToken(item, token, next);
       };
       next();
     },
-    [playOne]
+    [bumpPlaybackGeneration, playOneWithToken]
   );
 
   /**
@@ -152,71 +210,93 @@ export function useNewsPlayback(tenantSlug: string) {
    */
   const playUrl = useCallback(
     (url: string, fallbackText: string, onEnd: () => void) => {
+      const token = bumpPlaybackGeneration();
       cancelRobotSpeech();
       cleanup();
+
+      const finish = () => {
+        if (token === playbackGenRef.current) onEnd();
+      };
 
       const src = resolveAudioSrc(url);
       const a = new Audio(src);
       audioRef.current = a;
 
-      a.onended = () => {
-        audioRef.current = null;
-        onEnd();
-      };
-      a.onerror = () => {
-        audioRef.current = null;
+      const fallbackTts = () => {
+        if (token !== playbackGenRef.current) return;
+        stopHtmlAudio();
         void ttsToBlob(fallbackText, tenantSlug).then((blobUrl) => {
+          if (token !== playbackGenRef.current) {
+            if (blobUrl) URL.revokeObjectURL(blobUrl);
+            return;
+          }
           if (blobUrl) {
             blobUrlRef.current = blobUrl;
-            playBlobUrl(blobUrl, onEnd);
-          } else speakRobot(fallbackText, onEnd);
+            playBlobUrl(blobUrl, token, finish);
+          } else speakRobot(fallbackText, finish);
         });
       };
 
-      void a.play().catch(() => {
-        audioRef.current = null;
-        void ttsToBlob(fallbackText, tenantSlug).then((blobUrl) => {
-          if (blobUrl) {
-            blobUrlRef.current = blobUrl;
-            playBlobUrl(blobUrl, onEnd);
-          } else speakRobot(fallbackText, onEnd);
-        });
-      });
+      a.onended = () => {
+        if (token !== playbackGenRef.current) return;
+        stopHtmlAudio();
+        finish();
+      };
+      a.onerror = () => fallbackTts();
+      void a.play().catch(() => fallbackTts());
     },
-    [cleanup, playBlobUrl, tenantSlug]
+    [bumpPlaybackGeneration, cleanup, playBlobUrl, stopHtmlAudio, tenantSlug]
   );
 
   /** Reproduz uma lista de frases em sequência: ElevenLabs (texto unido) → navegador */
   const playParts = useCallback(
     (parts: string[], onEnd: () => void) => {
+      const token = bumpPlaybackGeneration();
       cancelRobotSpeech();
       cleanup();
 
+      const finish = () => {
+        if (token === playbackGenRef.current) onEnd();
+      };
+
       const joined = parts.join(" ");
       void ttsToBlob(joined, tenantSlug).then((blobUrl) => {
+        if (token !== playbackGenRef.current) {
+          if (blobUrl) URL.revokeObjectURL(blobUrl);
+          return;
+        }
         if (blobUrl) {
           blobUrlRef.current = blobUrl;
-          playBlobUrl(blobUrl, onEnd);
-        } else speakRobotParts(parts, onEnd);
+          playBlobUrl(blobUrl, token, finish);
+        } else speakRobotParts(parts, finish);
       });
     },
-    [cleanup, playBlobUrl, tenantSlug]
+    [bumpPlaybackGeneration, cleanup, playBlobUrl, tenantSlug]
   );
 
   /** Fala um texto simples: ElevenLabs real-time → navegador */
   const speak = useCallback(
     (text: string, onEnd: () => void) => {
+      const token = bumpPlaybackGeneration();
       cancelRobotSpeech();
       cleanup();
 
+      const finish = () => {
+        if (token === playbackGenRef.current) onEnd();
+      };
+
       void ttsToBlob(text, tenantSlug).then((blobUrl) => {
+        if (token !== playbackGenRef.current) {
+          if (blobUrl) URL.revokeObjectURL(blobUrl);
+          return;
+        }
         if (blobUrl) {
           blobUrlRef.current = blobUrl;
-          playBlobUrl(blobUrl, onEnd);
-        } else speakRobot(text, onEnd);
+          playBlobUrl(blobUrl, token, finish);
+        } else speakRobot(text, finish);
       });
     },
-    [cleanup, playBlobUrl, tenantSlug]
+    [bumpPlaybackGeneration, cleanup, playBlobUrl, tenantSlug]
   );
 
   return { playOne, playUrl, playParts, playSequential, speak, cancelPlayback };
