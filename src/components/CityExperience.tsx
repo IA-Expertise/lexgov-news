@@ -17,6 +17,7 @@ import { speechText } from "@/lib/newsSpeech";
 import { useVoiceUtterance } from "@/hooks/useVoiceCategory";
 import { useNewsPlayback } from "@/hooks/useNewsPlayback";
 import { cancelRobotSpeech } from "@/lib/robotSpeech";
+import { buildTop3Script } from "@/lib/top3Script";
 import { Captions } from "./Captions";
 import { Orb, type OrbState } from "./Orb";
 
@@ -65,7 +66,7 @@ export function CityExperience({ tenant, newsItems }: CityExperienceProps) {
   const [micStarted, setMicStarted] = useState(false);
   const [listenMode, setListenMode] = useState<ListenMode>("wake");
   const lastPickRef = useRef<number>(0);
-  const { playOne, playParts, speak } = useNewsPlayback();
+  const { playOne, playUrl, playParts, speak } = useNewsPlayback();
 
   useEffect(() => {
     return () => {
@@ -120,7 +121,8 @@ export function CityExperience({ tenant, newsItems }: CityExperienceProps) {
 
       if (intent.kind === "latest") {
         const sorted = sortNewsByRecency(newsItems);
-        const slice = sorted.slice(0, intent.count);
+        const count = Math.min(intent.count, 3);
+        const slice = sorted.slice(0, count);
         if (!slice.length) {
           speak("Não há notícias disponíveis no momento.", endPlayback);
           return;
@@ -131,11 +133,9 @@ export function CityExperience({ tenant, newsItems }: CityExperienceProps) {
         setPlaying(true);
         setCaptionText(slice.map((i) => i.title).join(" · "));
 
-        const intro = `Aqui estão as ${slice.length} notícias mais recentes.`;
-        const bullets = slice.map(
-          (it, i) => `Notícia ${i + 1}. ${it.title}.`
-        );
-        playParts([intro, ...bullets], endPlayback);
+        const fallbackText = buildTop3Script(slice.map((i) => i.title));
+        // Tenta o MP3 pré-gravado no ingest; se falhar, gera em tempo real
+        playUrl(`/audio/${tenant.slug}/top3.mp3`, fallbackText, endPlayback);
         return;
       }
 
@@ -177,7 +177,7 @@ export function CityExperience({ tenant, newsItems }: CityExperienceProps) {
         playParts([intro, ...parts], endPlayback);
       }
     },
-    [endPlayback, newsItems, playOne, playParts, speak, tenant.slug]
+    [endPlayback, newsItems, playOne, playParts, playUrl, speak, tenant.slug]
   );
 
   const handleUtterance = useCallback(

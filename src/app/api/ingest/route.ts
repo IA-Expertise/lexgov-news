@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { tenants } from "@/config/tenants";
 import { attachTtsToArticleIfPossible } from "@/lib/ingestElevenlabs";
+import { generateTop3Audio } from "@/lib/top3Audio";
 import { prisma } from "@/lib/prisma";
 import { fetchRssItems } from "@/lib/rssIngest";
 
@@ -82,6 +83,10 @@ export async function POST(request: NextRequest) {
       n += 1;
     }
     counts[tenant.slug] = n;
+    // Regrava o áudio da lista top-3 sempre que o ingest roda
+    await generateTop3Audio(tenant).catch((e) =>
+      console.error("[ingest top3]", e)
+    );
   }
 
   return NextResponse.json({ ok: true, ingested: counts });
