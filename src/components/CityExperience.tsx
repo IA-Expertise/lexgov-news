@@ -148,22 +148,30 @@ export function CityExperience({ tenant, newsItems }: CityExperienceProps) {
           return;
         }
 
-        const first = found[0];
+        const slice = found.slice(0, 3);
+        const first = slice[0];
         const hue =
           CATEGORY_COLORS[first.category as NewsCategory] ?? LEXGOV_BRAND_BLUE;
 
         setOrbHue(hue);
         setReflectionUrl(first.imageUrl);
         setPlaying(true);
-        setCaptionText(first.title);
+        setCaptionText(slice.map((i) => i.title).join(" · "));
 
-        if (found.length === 1) {
+        if (slice.length === 1) {
           speakRobot(speechText(first), endPlayback);
           return;
         }
 
-        const intro = `Encontrei ${found.length} resultados. Segue a primeira.`;
-        speakRobotParts([intro, speechText(first)], endPlayback);
+        const intro =
+          found.length > slice.length
+            ? `Encontrei ${found.length} resultados. Aqui estão as ${slice.length} primeiras.`
+            : `Encontrei ${found.length} ${found.length === 2 ? "notícias" : "notícias"}.`;
+
+        const parts = slice.map(
+          (item, i) => `Notícia ${i + 1}. ${speechText(item)}`
+        );
+        speakRobotParts([intro, ...parts], endPlayback);
       }
     },
     [endPlayback, newsItems, tenant.slug]
