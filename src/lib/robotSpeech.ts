@@ -7,14 +7,35 @@ function isBrowser(): boolean {
   return typeof window !== "undefined" && "speechSynthesis" in window;
 }
 
+const FEMALE_VOICE_NAMES = [
+  "luciana", "francisca", "maria", "vitória", "vitoria",
+  "google português do brasil", "google portuguese", "microsoft maria",
+];
+
+const MALE_VOICE_NAMES = [
+  "daniel", "eddy", "reed", "rocko", "sandy", "microsoft daniel",
+];
+
 function pickPtBrVoice(): SpeechSynthesisVoice | null {
   if (!isBrowser()) return null;
   const list = window.speechSynthesis.getVoices();
-  const ptBr =
-    list.find((v) => v.lang.toLowerCase().startsWith("pt-br")) ||
-    list.find((v) => v.lang.toLowerCase().startsWith("pt")) ||
+  const ptBr = list.filter(
+    (v) =>
+      v.lang.toLowerCase().startsWith("pt-br") ||
+      v.lang.toLowerCase().startsWith("pt")
+  );
+
+  const female =
+    ptBr.find((v) =>
+      FEMALE_VOICE_NAMES.some((name) => v.name.toLowerCase().includes(name))
+    ) ||
+    ptBr.find(
+      (v) => !MALE_VOICE_NAMES.some((name) => v.name.toLowerCase().includes(name))
+    ) ||
+    ptBr[0] ||
     null;
-  return ptBr ?? null;
+
+  return female;
 }
 
 let voicesReady = false;
@@ -53,7 +74,7 @@ export function speakRobot(
     const u = new SpeechSynthesisUtterance(text);
     u.lang = "pt-BR";
     u.rate = 0.92;
-    u.pitch = 1;
+    u.pitch = 1.2;
     u.volume = 1;
     const v = pickPtBrVoice();
     if (v) u.voice = v;
