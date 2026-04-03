@@ -5,7 +5,7 @@ import { Mic } from "lucide-react";
 import { AnimatePresence, motion } from "framer-motion";
 import type { TenantConfig } from "@/config/tenants";
 import { LEXGOV_BRAND_BLUE } from "@/config/tenants";
-import { CATEGORY_COLORS, CATEGORY_LABELS } from "@/lib/categories";
+import { CATEGORY_COLORS } from "@/lib/categories";
 import type { NewsItem, NewsCategory } from "@/mocks/news";
 import { getNewsByTenantAndCategory } from "@/mocks/news";
 import {
@@ -25,16 +25,6 @@ type CityExperienceProps = {
   tenant: TenantConfig;
   newsItems: NewsItem[];
 };
-
-/** Palavras-chave que ativam a LIA */
-const WAKE_WORDS = ["lia", "lia,", "ei lia", "hey lia", "olá lia", "ola lia", "ei, lia"];
-
-function isWakeWord(text: string): boolean {
-  const norm = text.toLowerCase().trim();
-  return WAKE_WORDS.some((w) => norm === w || norm.startsWith(w + " ") || norm.endsWith(" " + w));
-}
-
-type ListenMode = "wake" | "command";
 
 function orbStateFromVoice(
   voiceListening: boolean,
@@ -61,10 +51,10 @@ export function CityExperience({ tenant, newsItems }: CityExperienceProps) {
   const [playing, setPlaying] = useState(false);
   const [reflectionUrl, setReflectionUrl] = useState<string | null>(null);
   const [captionText, setCaptionText] = useState(
-    `Olá, sou a LIA. Atualizações oficiais de ${tenant.name}. Toque em "Ativar microfone" e fale o que precisa.`
+    `Olá, sou a LIA. Atualizações oficiais de ${tenant.name}. Toque em "Falar com a LIA" e diga sua pergunta.`
   );
-  const [micStarted, setMicStarted] = useState(false);
-  const [listenMode, setListenMode] = useState<ListenMode>("wake");
+  /** Só enquanto true o reconhecimento fica ativo — um toque = uma pergunta (sem microfone sempre ligado). */
+  const [sessionArmed, setSessionArmed] = useState(false);
   const lastPickRef = useRef<number>(0);
   const { playOne, playUrl, playParts, speak } = useNewsPlayback();
 
@@ -76,8 +66,9 @@ export function CityExperience({ tenant, newsItems }: CityExperienceProps) {
 
   const endPlayback = useCallback(() => {
     setPlaying(false);
-    setListenMode("wake");
-    setCaptionText(`Diga "LIA" para fazer outra pergunta.`);
+    setCaptionText(
+      'Toque em "Falar com a LIA" quando quiser fazer outra pergunta.'
+    );
   }, []);
 
   const processCommand = useCallback(
@@ -87,7 +78,6 @@ export function CityExperience({ tenant, newsItems }: CityExperienceProps) {
       lastPickRef.current = now;
 
       cancelRobotSpeech();
-      setListenMode("wake");
 
       const intent = parseVoiceIntent(text);
 
@@ -182,44 +172,54 @@ export function CityExperience({ tenant, newsItems }: CityExperienceProps) {
 
   const handleUtterance = useCallback(
     (text: string) => {
-      if (listenMode === "wake") {
-        if (isWakeWord(text)) {
-          setListenMode("command");
-          setCaptionText("Pode falar — estou ouvindo.");
-        }
-        // Palavra errada: ignora, microfone reinicia automaticamente
-        return;
-      }
-
-      // listenMode === "command"
+      setSessionArmed(false);
+      setCaptionText("Só um instante…");
       processCommand(text);
     },
-    [listenMode, processCommand]
+    [processCommand]
   );
 
-  // O microfone fica habilitado quando o usuário ativou e a LIA não está falando.
-  // Em modo wake: oneShot=false → contínuo (reinicia até ouvir "LIA")
-  // Em modo command: oneShot=true → disparo único (fecha após capturar o pedido)
-  const voiceEnabled = micStarted && !playing;
-  const oneShot = listenMode === "command";
+  const handleListeningEnd = useCallback(
+    (reason: "silence" | "error") => {
+      setSessionArmed(false);
+      if (reason === "silence") {
+        setCaptionText(
+          "Não ouvi bem. Toque de novo em \"Falar com a LIA\" e fale perto do microfone."
+        );
+      } else {
+        setCaptionText(
+          "Erro no microfone. Verifique a permissão ou tente Chrome / Edge."
+        );
+      }
+    },
+    []
+  );
 
-  const { status: voiceStatus } = useVoiceUtterance({
+  // Microfone só enquanto o usuário manteve a sessão armada e a LIA não está falando.
+  const voiceEnabled = sessionArmed && !playing;
+
+  const { status: voiceStatus, stop: stopListening } = useVoiceUtterance({
     enabled: voiceEnabled,
-    oneShot,
+    oneShot: true,
     onUtterance: handleUtterance,
+    onListeningEnd: handleListeningEnd,
   });
 
   const listening = voiceStatus === "listening";
   const orbVisualState = orbStateFromVoice(listening, playing);
 
-  const onActivateMic = useCallback(() => {
-    setMicStarted(true);
-    setCaptionText(`Diga "LIA" para começar.`);
+  const onArmSession = useCallback(() => {
+    setSessionArmed(true);
+    setCaptionText("Estou ouvindo — fale sua pergunta.");
   }, []);
 
-  const wakeHint = listenMode === "wake"
-    ? 'Aguardando "LIA"…'
-    : "Escutando seu pedido…";
+  const onCancelListening = useCallback(() => {
+    stopListening();
+    setSessionArmed(false);
+    setCaptionText(
+      'Toque em "Falar com a LIA" quando quiser perguntar de novo.'
+    );
+  }, [stopListening]);
 
   return (
     <div className="flex h-[100dvh] flex-col overflow-hidden bg-black text-white selection:bg-white/20">
@@ -266,27 +266,35 @@ export function CityExperience({ tenant, newsItems }: CityExperienceProps) {
       </main>
 
       <footer className="shrink-0 px-4 pb-[max(1rem,env(safe-area-inset-bottom))] pt-0">
-        {!micStarted ? (
-          <div className="pointer-events-auto flex justify-center">
+        <div className="pointer-events-auto flex flex-col items-center gap-3">
+          {!sessionArmed && !playing && (
             <button
               type="button"
-              onClick={onActivateMic}
+              onClick={onArmSession}
               className="rounded-full border border-white/25 bg-white/10 px-6 py-2.5 text-xs font-medium text-white backdrop-blur-sm transition-colors hover:bg-white/15 focus:outline-none focus-visible:ring-2 focus-visible:ring-white/80 focus-visible:ring-offset-2 focus-visible:ring-offset-black sm:text-sm"
             >
-              Ativar microfone
+              Falar com a LIA
             </button>
-          </div>
-        ) : (
+          )}
+          {sessionArmed && listening && (
+            <button
+              type="button"
+              onClick={onCancelListening}
+              className="text-[11px] text-white/50 underline-offset-2 hover:text-white/75 hover:underline sm:text-xs"
+            >
+              Cancelar escuta
+            </button>
+          )}
           <p className="pointer-events-none text-center text-[10px] leading-relaxed text-white/42 sm:text-[11px]">
             {voiceStatus === "unsupported"
               ? "Reconhecimento de voz não disponível. Use Chrome ou Edge."
               : playing
                 ? "LIA está falando…"
                 : listening
-                  ? wakeHint
-                  : ""}
+                  ? "Ouvindo sua pergunta…"
+                  : null}
           </p>
-        )}
+        </div>
       </footer>
     </div>
   );

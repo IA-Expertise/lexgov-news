@@ -7,13 +7,13 @@ export type VoiceStatus = "idle" | "listening" | "unsupported";
 type UseVoiceUtteranceOptions = {
   enabled: boolean;
   /**
-   * Se true (padrão): fecha o microfone imediatamente após capturar um
-   * resultado — modo disparo único (comando).
-   * Se false: o microfone reinicia automaticamente após cada resultado —
-   * modo contínuo (escuta de palavra-chave).
+   * Se true (padrão): uma única tomada de fala; não reinicia após silêncio.
+   * Se false: reinicia após cada ciclo (ex.: escuta contínua de palavra-chave).
    */
   oneShot?: boolean;
   onUtterance: (text: string) => void;
+  /** Chamado em modo oneShot quando o ciclo termina sem texto (silêncio/timeout) ou erro. */
+  onListeningEnd?: (reason: "silence" | "error") => void;
 };
 
 /** Tipagem mínima — APIs de fala não estão em todos os ambientes de build */
@@ -48,14 +48,18 @@ export function useVoiceUtterance({
   enabled,
   oneShot = true,
   onUtterance,
+  onListeningEnd,
 }: UseVoiceUtteranceOptions) {
   const [status, setStatus] = useState<VoiceStatus>("idle");
   const [lastHeard, setLastHeard] = useState<string>("");
   const recRef = useRef<SpeechRecLike | null>(null);
+  const heardRef = useRef(false);
   const enabledRef = useRef(enabled);
   const oneShotRef = useRef(oneShot);
   const onUtteranceRef = useRef(onUtterance);
+  const onListeningEndRef = useRef(onListeningEnd);
   onUtteranceRef.current = onUtterance;
+  onListeningEndRef.current = onListeningEnd;
   enabledRef.current = enabled;
   oneShotRef.current = oneShot;
 
@@ -74,6 +78,7 @@ export function useVoiceUtterance({
   }, []);
 
   const bindRecognition = useCallback((rec: SpeechRecLike) => {
+    heardRef.current = false;
     rec.lang = "pt-BR";
     rec.interimResults = false;
     rec.continuous = false;
@@ -84,15 +89,19 @@ export function useVoiceUtterance({
       const text = last?.[0]?.transcript?.trim() ?? "";
       if (!text) return;
 
+      heardRef.current = true;
+
       if (oneShotRef.current) {
-        // Modo comando: fecha o microfone imediatamente após capturar a frase
         rec.onend = null;
         rec.onerror = null;
         recRef.current = null;
-        try { rec.abort(); } catch { /* ignore */ }
+        try {
+          rec.abort();
+        } catch {
+          /* ignore */
+        }
         setStatus("idle");
       }
-      // Modo wake word (oneShot=false): não fecha — onend vai reiniciar automaticamente
 
       setLastHeard(text);
       onUtteranceRef.current(text);
@@ -100,7 +109,11 @@ export function useVoiceUtterance({
 
     rec.onerror = () => {
       if (recRef.current !== rec) return;
+      recRef.current = null;
       setStatus("idle");
+      if (oneShotRef.current) {
+        onListeningEndRef.current?.("error");
+      }
     };
 
     rec.onend = () => {
@@ -109,7 +122,16 @@ export function useVoiceUtterance({
         setStatus("idle");
         return;
       }
-      // Reinicia: pode ser silêncio/timeout (wake mode) ou após resultado sem close (wake mode)
+
+      if (oneShotRef.current) {
+        if (!heardRef.current) {
+          recRef.current = null;
+          setStatus("idle");
+          onListeningEndRef.current?.("silence");
+        }
+        return;
+      }
+
       try {
         rec.start();
       } catch {

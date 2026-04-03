@@ -38,11 +38,12 @@ export async function POST(request: NextRequest) {
 
   try {
     const mp3 = await textToSpeechMp3(text, voiceId);
-    return new NextResponse(mp3, {
+    const body = new Uint8Array(mp3);
+    return new NextResponse(body, {
       status: 200,
       headers: {
         "Content-Type": "audio/mpeg",
-        "Content-Length": String(mp3.length),
+        "Content-Length": String(body.byteLength),
         "Cache-Control": "no-store",
       },
     });

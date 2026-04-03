@@ -1,5 +1,8 @@
-import { GoogleGenAI } from "@google/genai";
-import type { Content } from "@google/genai";
+import {
+  FunctionCallingConfigMode,
+  GoogleGenAI,
+} from "@google/genai";
+import type { Content, ToolListUnion } from "@google/genai";
 import { fetchNewsForAgent } from "@/lib/agentNewsData";
 
 export type IntermediaryTurn = { role: "user" | "model"; text: string };
@@ -86,7 +89,7 @@ export async function runIntermediaryChat(input: {
         },
       ],
     },
-  ];
+  ] as unknown as ToolListUnion;
 
   const systemInstruction = `${SYSTEM_PT}\n\nCidade padrão desta sessão: "${city}". Prefira usar esta cidade em listar_noticias.cidade salvo se o usuário pedir outra explicitamente.`;
 
@@ -105,7 +108,9 @@ export async function runIntermediaryChat(input: {
       config: {
         systemInstruction,
         tools,
-        toolConfig: { functionCallingConfig: { mode: "AUTO" } },
+        toolConfig: {
+          functionCallingConfig: { mode: FunctionCallingConfigMode.AUTO },
+        },
       },
     });
 
