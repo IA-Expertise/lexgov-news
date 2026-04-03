@@ -14,7 +14,7 @@ import {
 export async function POST(request: NextRequest) {
   if (!isGeminiConfigured()) {
     return NextResponse.json(
-      { error: "GEMINI_API_KEY não configurada no servidor" },
+      { error: "Integração Gemini não configurada no servidor" },
       { status: 503 }
     );
   }

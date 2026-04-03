@@ -1,16 +1,11 @@
-import {
-  FunctionCallingMode,
-  GoogleGenerativeAI,
-  SchemaType,
-} from "@google/generative-ai";
-import type { Content, FunctionDeclaration, Schema } from "@google/generative-ai";
+import { GoogleGenAI } from "@google/genai";
+import type { Content } from "@google/genai";
 import { fetchNewsForAgent } from "@/lib/agentNewsData";
 
 export type IntermediaryTurn = { role: "user" | "model"; text: string };
 
 export type IntermediaryResult = {
   reply: string;
-  /** Metadados opcionais para demo / debug */
   toolTrace?: { name: string; args: Record<string, unknown> }[];
 };
 
@@ -21,14 +16,14 @@ Se a lista vier vazia, diga que não encontrou resultados para o filtro e sugira
 Não invente fatos além do que vier da ferramenta.`;
 
 export function isGeminiConfigured(): boolean {
-  return Boolean(process.env.GEMINI_API_KEY?.trim());
+  return Boolean(process.env.AI_INTEGRATIONS_GEMINI_API_KEY?.trim());
 }
 
 function defaultModel(): string {
-  return process.env.GEMINI_MODEL?.trim() || "gemini-2.0-flash";
+  return "gemini-2.5-flash";
 }
 
-function turnsToHistory(turns: IntermediaryTurn[]): Content[] {
+function turnsToContents(turns: IntermediaryTurn[]): Content[] {
   return turns.map((t) => ({
     role: t.role,
     parts: [{ text: t.text }],
@@ -40,9 +35,11 @@ export async function runIntermediaryChat(input: {
   message: string;
   history?: IntermediaryTurn[];
 }): Promise<IntermediaryResult> {
-  const key = process.env.GEMINI_API_KEY?.trim();
-  if (!key) {
-    throw new Error("GEMINI_API_KEY não configurada");
+  const apiKey = process.env.AI_INTEGRATIONS_GEMINI_API_KEY?.trim();
+  const baseUrl = process.env.AI_INTEGRATIONS_GEMINI_BASE_URL?.trim();
+
+  if (!apiKey) {
+    throw new Error("Integração Gemini não configurada");
   }
 
   const city = input.city.trim().toLowerCase();
@@ -50,103 +47,119 @@ export async function runIntermediaryChat(input: {
     throw new Error("city é obrigatório");
   }
 
-  const genAI = new GoogleGenerativeAI(key);
+  const ai = new GoogleGenAI({
+    apiKey,
+    httpOptions: {
+      apiVersion: "",
+      baseUrl: baseUrl || undefined,
+    },
+  });
+
   const toolTrace: { name: string; args: Record<string, unknown> }[] = [];
 
-  const listarNoticiasDecl: FunctionDeclaration = {
-    name: "listar_noticias",
-    description:
-      "Busca notícias já ingeridas do portal da cidade. Use para responder sobre últimas matérias, temas (ex.: esportes, saúde) ou termos livres.",
-    parameters: {
-      type: SchemaType.OBJECT,
-      properties: {
-        cidade: {
-          type: SchemaType.STRING,
-          description: "Slug da cidade (ex.: louveira, vinhedo).",
-        } satisfies Schema,
-        q: {
-          type: SchemaType.STRING,
+  const tools = [
+    {
+      functionDeclarations: [
+        {
+          name: "listar_noticias",
           description:
-            "Filtro opcional: palavras do tema ou busca (ex.: esporte, vacina, obra). Vazio para listar as mais recentes.",
-        } satisfies Schema,
-        limit: {
-          type: SchemaType.INTEGER,
-          description: "Quantidade máxima de notícias (1–25). Padrão 8.",
-        } satisfies Schema,
-      },
-      required: ["cidade"],
+            "Busca notícias já ingeridas do portal da cidade. Use para responder sobre últimas matérias, temas (ex.: esportes, saúde) ou termos livres.",
+          parameters: {
+            type: "object",
+            properties: {
+              cidade: {
+                type: "string",
+                description: "Slug da cidade (ex.: louveira, vinhedo).",
+              },
+              q: {
+                type: "string",
+                description:
+                  "Filtro opcional: palavras do tema ou busca (ex.: esporte, vacina, obra). Vazio para listar as mais recentes.",
+              },
+              limit: {
+                type: "integer",
+                description: "Quantidade máxima de notícias (1–25). Padrão 8.",
+              },
+            },
+            required: ["cidade"],
+          },
+        },
+      ],
     },
-  };
+  ];
 
-  const model = genAI.getGenerativeModel({
-    model: defaultModel(),
-    systemInstruction: `${SYSTEM_PT}\n\nCidade padrão desta sessão: "${city}". Prefira usar esta cidade em listar_noticias.cidade salvo se o usuário pedir outra explicitamente.`,
-    tools: [{ functionDeclarations: [listarNoticiasDecl] }],
-    toolConfig: {
-      functionCallingConfig: { mode: FunctionCallingMode.AUTO },
-    },
-  });
+  const systemInstruction = `${SYSTEM_PT}\n\nCidade padrão desta sessão: "${city}". Prefira usar esta cidade em listar_noticias.cidade salvo se o usuário pedir outra explicitamente.`;
 
-  const prior = input.history?.length
-    ? turnsToHistory(input.history)
-    : [];
+  const prior = input.history?.length ? turnsToContents(input.history) : [];
+  let contents: Content[] = [
+    ...prior,
+    { role: "user", parts: [{ text: input.message.trim() }] },
+  ];
 
-  const chat = model.startChat({
-    history: prior,
-  });
-
-  let result = await chat.sendMessage(input.message.trim());
   const maxToolRounds = 5;
 
-  for (let round = 0; round < maxToolRounds; round++) {
-    const calls = result.response.functionCalls();
-    if (!calls?.length) break;
+  for (let round = 0; round <= maxToolRounds; round++) {
+    const response = await ai.models.generateContent({
+      model: defaultModel(),
+      contents,
+      config: {
+        systemInstruction,
+        tools,
+        toolConfig: { functionCallingConfig: { mode: "AUTO" } },
+      },
+    });
 
-    const responseParts: {
-      functionResponse: { name: string; response: Record<string, unknown> };
-    }[] = [];
+    const candidate = response.candidates?.[0];
+    const parts = candidate?.content?.parts || [];
 
-    for (const call of calls) {
-      toolTrace.push({
-        name: call.name,
-        args: call.args as Record<string, unknown>,
-      });
+    const fnCalls = parts.filter((p) => p.functionCall);
+
+    if (!fnCalls.length) {
+      const text = response.text || "";
+      return {
+        reply: text.trim() || "Não consegui gerar uma resposta. Tente de novo.",
+        toolTrace: toolTrace.length ? toolTrace : undefined,
+      };
+    }
+
+    contents = [...contents, { role: "model", parts }];
+
+    const fnResponseParts: Content["parts"] = [];
+
+    for (const part of fnCalls) {
+      const call = part.functionCall!;
+      const args = (call.args || {}) as Record<string, unknown>;
+      toolTrace.push({ name: call.name!, args });
 
       if (call.name === "listar_noticias") {
-        const args = call.args as {
-          cidade?: string;
-          q?: string;
-          limit?: number;
-        };
-        const c = (args.cidade || city).trim().toLowerCase();
+        const c = ((args.cidade as string) || city).trim().toLowerCase();
         const q = typeof args.q === "string" ? args.q : "";
         const limit =
           typeof args.limit === "number" && Number.isFinite(args.limit)
-            ? args.limit
+            ? (args.limit as number)
             : 8;
         const data = await fetchNewsForAgent(c, { q, limit });
-        responseParts.push({
+        fnResponseParts.push({
           functionResponse: {
             name: call.name,
             response: { ok: true, ...data },
           },
         });
       } else {
-        responseParts.push({
+        fnResponseParts.push({
           functionResponse: {
-            name: call.name,
+            name: call.name!,
             response: { ok: false, error: "função_desconhecida" },
           },
         });
       }
     }
 
-    result = await chat.sendMessage(responseParts);
+    contents = [...contents, { role: "user", parts: fnResponseParts }];
   }
 
-  const text = result.response.text();
   return {
-    reply: text.trim() || "Não consegui gerar uma resposta. Tente de novo.",
+    reply: "Não consegui gerar uma resposta. Tente de novo.",
     toolTrace: toolTrace.length ? toolTrace : undefined,
   };
 }
