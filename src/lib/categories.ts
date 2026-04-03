@@ -8,9 +8,9 @@ export const CATEGORY_LABELS: Record<NewsCategory, string> = {
   educacao: "Educação",
 };
 
-/** Cores por categoria (transição do Orbe ao selecionar tema) */
+/** Cores por categoria (Orbe + brilho das pílulas — Obras em âmbar quente, alinhado ao mock visual) */
 export const CATEGORY_COLORS: Record<NewsCategory, string> = {
-  saude: "#00A86B",
-  obras: "#E65100",
-  educacao: "#1565C0",
+  saude: "#00C853",
+  obras: "#FF9A3C",
+  educacao: "#3B82F6",
 };

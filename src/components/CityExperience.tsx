@@ -1,17 +1,14 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Radio } from "lucide-react";
+import { Mic } from "lucide-react";
 import { AnimatePresence, motion } from "framer-motion";
 import type { TenantConfig } from "@/config/tenants";
 import { LEXGOV_BRAND_BLUE } from "@/config/tenants";
-import {
-  CATEGORY_COLORS,
-  CATEGORY_LABELS,
-  CATEGORY_ORDER,
-} from "@/lib/categories";
+import { CATEGORY_COLORS, CATEGORY_LABELS } from "@/lib/categories";
 import type { NewsCategory } from "@/mocks/news";
 import { getNewsByTenantAndCategory } from "@/mocks/news";
+import { useVoiceCategory } from "@/hooks/useVoiceCategory";
 import { Captions } from "./Captions";
 import { Orb, type OrbState } from "./Orb";
 
@@ -19,17 +16,24 @@ type CityExperienceProps = {
   tenant: TenantConfig;
 };
 
+function orbStateFromVoice(
+  voiceListening: boolean,
+  talking: boolean
+): OrbState {
+  if (talking) return "talking";
+  if (voiceListening) return "listening";
+  return "idle";
+}
+
 export function CityExperience({ tenant }: CityExperienceProps) {
   const [orbHue, setOrbHue] = useState<string>(LEXGOV_BRAND_BLUE);
-  const [orbState, setOrbState] = useState<OrbState>("idle");
+  const [playing, setPlaying] = useState(false);
   const [reflectionUrl, setReflectionUrl] = useState<string | null>(null);
   const [captionText, setCaptionText] = useState(
-    `Olá, sou a LIA. Tenho atualizações oficiais de ${tenant.name}. Sobre o que quer falar agora?`
-  );
-  const [activeCategory, setActiveCategory] = useState<NewsCategory | null>(
-    null
+    `Olá, sou a LIA. Atualizações oficiais de ${tenant.name}. Diga em voz alta: Saúde, Obras ou Educação.`
   );
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const lastPickRef = useRef<number>(0);
 
   const clearTimer = useCallback(() => {
     if (timerRef.current) {
@@ -42,63 +46,81 @@ export function CityExperience({ tenant }: CityExperienceProps) {
     return () => clearTimer();
   }, [clearTimer]);
 
-  const handleCategory = (category: NewsCategory) => {
-    clearTimer();
-    const item = getNewsByTenantAndCategory(tenant.slug, category);
-    if (!item) return;
+  const handleCategory = useCallback(
+    (category: NewsCategory) => {
+      const now = Date.now();
+      if (now - lastPickRef.current < 900) return;
+      lastPickRef.current = now;
 
-    setActiveCategory(category);
-    setOrbHue(CATEGORY_COLORS[category]);
-    setReflectionUrl(item.imageUrl);
-    setOrbState("talking");
-    setCaptionText(item.summary);
+      clearTimer();
+      const item = getNewsByTenantAndCategory(tenant.slug, category);
+      if (!item) return;
 
-    const wordCount = item.summary.trim().split(/\s+/).length;
-    const ms = Math.min(45000, Math.max(3500, wordCount * 220));
+      setOrbHue(CATEGORY_COLORS[category]);
+      setReflectionUrl(item.imageUrl);
+      setPlaying(true);
+      setCaptionText(item.title);
 
-    timerRef.current = setTimeout(() => {
-      setOrbState("idle");
-      setCaptionText(
-        `Quer ouvir outro tema? Escolha Saúde, Obras ou Educação — ou peça de novo sobre ${CATEGORY_LABELS[category]}.`
-      );
-      timerRef.current = null;
-    }, ms);
-  };
+      const words = item.title.trim().split(/\s+/).length;
+      const ms = Math.min(22000, Math.max(4500, words * 420));
+
+      timerRef.current = setTimeout(() => {
+        setPlaying(false);
+        setCaptionText(
+          `Fale outro tema: ${CATEGORY_LABELS.saude}, ${CATEGORY_LABELS.obras} ou ${CATEGORY_LABELS.educacao}.`
+        );
+        timerRef.current = null;
+      }, ms);
+    },
+    [clearTimer, tenant.slug]
+  );
+
+  const voiceEnabled = !playing;
+
+  const { status: voiceStatus } = useVoiceCategory({
+    enabled: voiceEnabled,
+    onCategory: handleCategory,
+  });
+
+  const listening = voiceStatus === "listening";
+  const orbVisualState = orbStateFromVoice(listening, playing);
 
   return (
-    <div className="flex h-screen min-h-0 flex-col overflow-hidden bg-black text-white">
-      <header className="shrink-0 px-6 pt-8 text-center">
+    <div className="flex h-[100dvh] flex-col overflow-hidden bg-black text-white selection:bg-white/20">
+      <header className="pointer-events-none shrink-0 px-4 pb-1 pt-[max(1.75rem,env(safe-area-inset-top))] text-center">
         <motion.p
-          initial={{ opacity: 0, y: -8 }}
+          initial={{ opacity: 0, y: -6 }}
           animate={{ opacity: 1, y: 0 }}
-          className="flex items-center justify-center gap-2 text-xs font-medium uppercase tracking-[0.35em] text-white/70"
+          className="flex items-center justify-center gap-1.5 text-[10px] font-medium uppercase tracking-[0.38em] text-white sm:text-[11px]"
         >
-          <Radio className="h-3.5 w-3.5 shrink-0 text-white/80" aria-hidden />
+          <Mic className="h-3 w-3 shrink-0 text-white/85" aria-hidden />
           LexGov News
         </motion.p>
         <motion.h1
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
-          transition={{ delay: 0.1 }}
-          className="mt-2 font-sans text-lg font-semibold text-white md:text-xl"
+          transition={{ delay: 0.06 }}
+          className="mx-auto mt-2 max-w-[18rem] font-sans text-[0.95rem] font-bold leading-tight tracking-tight text-white sm:max-w-md sm:text-lg"
         >
           Comunicação Inteligente para o Cidadão
         </motion.h1>
-        <p className="mt-1 text-sm text-white/80">{tenant.name}</p>
+        <p className="mt-1.5 text-[12px] font-normal text-neutral-500 sm:text-sm">
+          {tenant.name}
+        </p>
       </header>
 
-      <main className="flex min-h-0 flex-1 flex-col items-center justify-center px-4 py-6">
+      <main className="pointer-events-none flex min-h-0 flex-1 flex-col items-center justify-center px-3 py-2">
         <AnimatePresence mode="wait">
           <motion.div
             key={`${tenant.slug}-${orbHue}-${reflectionUrl ?? "none"}`}
-            initial={{ opacity: 0.85, scale: 0.98 }}
+            initial={{ opacity: 0.9, scale: 0.99 }}
             animate={{ opacity: 1, scale: 1 }}
             exit={{ opacity: 0 }}
-            transition={{ duration: 0.45, ease: [0.22, 1, 0.36, 1] }}
-            className="flex flex-col items-center gap-8"
+            transition={{ duration: 0.4, ease: [0.22, 1, 0.36, 1] }}
+            className="flex w-full max-w-lg flex-col items-center gap-4 sm:gap-5"
           >
             <Orb
-              state={orbState}
+              state={orbVisualState}
               imageUrl={reflectionUrl}
               categoryColor={orbHue}
             />
@@ -107,32 +129,17 @@ export function CityExperience({ tenant }: CityExperienceProps) {
         </AnimatePresence>
       </main>
 
-      <footer className="shrink-0 px-4 pb-10 pt-2">
-        <p className="mb-3 text-center text-xs text-white/50">
-          Escolha um tema
+      <footer className="pointer-events-none shrink-0 px-4 pb-[max(1rem,env(safe-area-inset-bottom))] pt-0">
+        <p className="text-center text-[10px] leading-relaxed text-white/42 sm:text-[11px]">
+          Comando por voz ·{" "}
+          {voiceStatus === "unsupported"
+            ? "Use Chrome ou Edge no celular para falar com a LIA."
+            : listening
+              ? "Escutando…"
+              : playing
+                ? "Reproduzindo…"
+                : "Diga: Saúde, Obras ou Educação"}
         </p>
-        <div className="flex flex-wrap items-center justify-center gap-3">
-          {CATEGORY_ORDER.map((cat) => {
-            const selected = activeCategory === cat;
-            return (
-              <motion.button
-                key={cat}
-                type="button"
-                onClick={() => handleCategory(cat)}
-                className="rounded-full border border-white/25 bg-white/5 px-5 py-2.5 text-sm font-medium text-white backdrop-blur-sm transition-colors hover:bg-white/12 focus:outline-none focus-visible:ring-2 focus-visible:ring-white focus-visible:ring-offset-2 focus-visible:ring-offset-black"
-                style={{
-                  boxShadow: selected
-                    ? `0 0 20px ${CATEGORY_COLORS[cat]}55`
-                    : undefined,
-                }}
-                whileTap={{ scale: 0.97 }}
-                whileHover={{ scale: 1.02 }}
-              >
-                {CATEGORY_LABELS[cat]}
-              </motion.button>
-            );
-          })}
-        </div>
       </footer>
     </div>
   );
