@@ -73,8 +73,8 @@ export function speakRobot(
   const speak = (): void => {
     const u = new SpeechSynthesisUtterance(text);
     u.lang = "pt-BR";
-    u.rate = 0.92;
-    u.pitch = 1.2;
+    u.rate = 1.08;
+    u.pitch = 1.5;
     u.volume = 1;
     const v = pickPtBrVoice();
     if (v) u.voice = v;
