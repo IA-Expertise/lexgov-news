@@ -12,6 +12,7 @@
     "db:push": "prisma db push"
   },
   "dependencies": {
+    "@google/generative-ai": "^0.24.1",
     "@prisma/client": "^5.22.0",
     "framer-motion": "^12.38.0",
     "lucide-react": "^1.7.0",

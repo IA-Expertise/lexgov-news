@@ -13,8 +13,10 @@ import {
   parseVoiceIntent,
   sortNewsByRecency,
 } from "@/lib/voiceIntent";
+import { speechText } from "@/lib/newsSpeech";
 import { useVoiceUtterance } from "@/hooks/useVoiceCategory";
-import { cancelRobotSpeech, speakRobot, speakRobotParts } from "@/lib/robotSpeech";
+import { useNewsPlayback } from "@/hooks/useNewsPlayback";
+import { cancelRobotSpeech, speakRobot } from "@/lib/robotSpeech";
 import { Captions } from "./Captions";
 import { Orb, type OrbState } from "./Orb";
 
@@ -30,17 +32,6 @@ function orbStateFromVoice(
   if (talking) return "talking";
   if (voiceListening) return "listening";
   return "idle";
-}
-
-function speechText(item: NewsItem): string {
-  const full = `${item.title}. ${item.summary}`;
-  const sentences = full.match(/[^.!?]+[.!?]+/g) ?? [full];
-  let result = "";
-  for (const s of sentences) {
-    if ((result + s).length > 300) break;
-    result += s + " ";
-  }
-  return result.trim() || full.slice(0, 300);
 }
 
 function pickNewsForCategory(
@@ -63,6 +54,7 @@ export function CityExperience({ tenant, newsItems }: CityExperienceProps) {
   );
   const [micStarted, setMicStarted] = useState(false);
   const lastPickRef = useRef<number>(0);
+  const { playOne, playParts } = useNewsPlayback();
 
   useEffect(() => {
     return () => {
@@ -111,7 +103,7 @@ export function CityExperience({ tenant, newsItems }: CityExperienceProps) {
         setReflectionUrl(item.imageUrl);
         setPlaying(true);
         setCaptionText(item.title);
-        speakRobot(speechText(item), endPlayback);
+        playOne(item, endPlayback);
         return;
       }
 
@@ -132,7 +124,7 @@ export function CityExperience({ tenant, newsItems }: CityExperienceProps) {
         const bullets = slice.map(
           (it, i) => `Notícia ${i + 1}. ${it.title}.`
         );
-        speakRobotParts([intro, ...bullets], endPlayback);
+        playParts([intro, ...bullets], endPlayback);
         return;
       }
 
@@ -159,7 +151,7 @@ export function CityExperience({ tenant, newsItems }: CityExperienceProps) {
         setCaptionText(slice.map((i) => i.title).join(" · "));
 
         if (slice.length === 1) {
-          speakRobot(speechText(first), endPlayback);
+          playOne(first, endPlayback);
           return;
         }
 
@@ -171,10 +163,10 @@ export function CityExperience({ tenant, newsItems }: CityExperienceProps) {
         const parts = slice.map(
           (item, i) => `Notícia ${i + 1}. ${speechText(item)}`
         );
-        speakRobotParts([intro, ...parts], endPlayback);
+        playParts([intro, ...parts], endPlayback);
       }
     },
-    [endPlayback, newsItems, tenant.slug]
+    [endPlayback, newsItems, playOne, playParts, tenant.slug]
   );
 
   const voiceEnabled = !playing && micStarted;

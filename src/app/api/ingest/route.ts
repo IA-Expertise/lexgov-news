@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { tenants } from "@/config/tenants";
+import { attachTtsToArticleIfPossible } from "@/lib/ingestElevenlabs";
 import { prisma } from "@/lib/prisma";
 import { fetchRssItems } from "@/lib/rssIngest";
 
@@ -34,10 +35,10 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  let body: { tenantSlug?: string } = {};
+  let body: { tenantSlug?: string; forceTts?: boolean } = {};
   try {
     const t = await request.text();
-    if (t) body = JSON.parse(t) as { tenantSlug?: string };
+    if (t) body = JSON.parse(t) as { tenantSlug?: string; forceTts?: boolean };
   } catch {
     body = {};
   }
@@ -52,7 +53,7 @@ export async function POST(request: NextRequest) {
     let n = 0;
     const items = await fetchRssItems(tenant.rssUrl);
     for (const item of items.slice(0, 40)) {
-      await prisma.newsArticle.upsert({
+      const row = await prisma.newsArticle.upsert({
         where: { sourceUrl: item.sourceUrl },
         create: {
           tenantSlug: tenant.slug,
@@ -71,6 +72,13 @@ export async function POST(request: NextRequest) {
           publishedAt: item.publishedAt,
         },
       });
+      await attachTtsToArticleIfPossible(
+        row.id,
+        tenant,
+        row.title,
+        row.summary,
+        { force: body.forceTts === true }
+      );
       n += 1;
     }
     counts[tenant.slug] = n;

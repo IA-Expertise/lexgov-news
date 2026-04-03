@@ -36,3 +36,6 @@ yarn-error.log*
 *.tsbuildinfo
 next-env.d.ts
 
+# Áudio gerado na ingestão (Replit / local)
+public/audio/
+

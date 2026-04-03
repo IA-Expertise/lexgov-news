@@ -4,6 +4,7 @@ export type TenantConfig = {
   name: string;
   primaryColor: string;
   secondaryColor: string;
+  /** ID de voz na ElevenLabs (não o nome exibido) */
   voiceId: string;
   rssUrl: string;
 };

@@ -9,6 +9,7 @@ function rowToNewsItem(r: {
   title: string;
   summary: string;
   imageUrl: string;
+  audioUrl: string;
   publishedAt: Date | null;
 }): NewsItem {
   return {
@@ -17,7 +18,7 @@ function rowToNewsItem(r: {
     category: r.category as NewsItem["category"],
     title: r.title,
     summary: r.summary,
-    audioUrl: "",
+    audioUrl: r.audioUrl || "",
     imageUrl: r.imageUrl || "https://images.unsplash.com/photo-1504711434969-e33886168f5c?w=800&q=80",
     publishedAt: r.publishedAt ? r.publishedAt.toISOString() : undefined,
   };
