@@ -30,8 +30,14 @@ type SpeechRecLike = {
   onend: (() => void) | null;
 };
 
+type SpeechRecognitionResultLike = {
+  0?: { transcript?: string };
+  /** Chrome pode enviar resultados intermediários mesmo com interimResults=false */
+  isFinal?: boolean;
+};
+
 type SpeechRecognitionEventLike = {
-  results: ArrayLike<{ 0?: { transcript?: string } }>;
+  results: ArrayLike<SpeechRecognitionResultLike>;
 };
 
 function createRecognition(): SpeechRecLike | null {
@@ -86,6 +92,8 @@ export function useVoiceUtterance({
 
     rec.onresult = (ev: SpeechRecognitionEventLike) => {
       const last = ev.results[ev.results.length - 1];
+      if (last?.isFinal === false) return;
+
       const text = last?.[0]?.transcript?.trim() ?? "";
       if (!text) return;
 

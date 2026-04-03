@@ -15,13 +15,15 @@ function resolveAudioSrc(audioUrl: string): string {
 
 async function ttsToBlob(
   text: string,
-  tenantSlug: string
+  tenantSlug: string,
+  signal?: AbortSignal
 ): Promise<string | null> {
   try {
     const res = await fetch("/api/tts", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ text, tenantSlug }),
+      signal,
     });
     if (!res.ok) return null;
     const blob = await res.blob();
@@ -32,15 +34,27 @@ async function ttsToBlob(
 }
 
 export function useNewsPlayback(tenantSlug: string) {
-  const audioRef = useRef<HTMLAudioElement | null>(null);
+  /** Um único elemento <audio> — evita dois players HTML a tocar em paralelo. */
+  const audioElRef = useRef<HTMLAudioElement | null>(null);
   const blobUrlRef = useRef<string | null>(null);
-  /** Incrementa a cada nova reprodução; callbacks antigos de TTS/áudio são ignorados (evita voz dobrada). */
+  const ttsAbortRef = useRef<AbortController | null>(null);
+  /** Incrementa a cada nova reprodução; callbacks antigos de TTS/áudio são ignorados. */
   const playbackGenRef = useRef(0);
 
+  const getAudioEl = useCallback((): HTMLAudioElement => {
+    if (!audioElRef.current) {
+      audioElRef.current = new Audio();
+      audioElRef.current.preload = "auto";
+    }
+    return audioElRef.current;
+  }, []);
+
   const stopHtmlAudio = useCallback(() => {
-    const a = audioRef.current;
+    const a = audioElRef.current;
     if (a) {
       try {
+        a.onended = null;
+        a.onerror = null;
         a.pause();
         a.removeAttribute("src");
         a.load();
@@ -48,10 +62,11 @@ export function useNewsPlayback(tenantSlug: string) {
         /* ignore */
       }
     }
-    audioRef.current = null;
   }, []);
 
   const cleanup = useCallback(() => {
+    ttsAbortRef.current?.abort();
+    ttsAbortRef.current = null;
     stopHtmlAudio();
     if (blobUrlRef.current) {
       try {
@@ -79,6 +94,7 @@ export function useNewsPlayback(tenantSlug: string) {
       bumpPlaybackGeneration();
       cleanup();
       cancelRobotSpeech();
+      audioElRef.current = null;
     };
   }, [bumpPlaybackGeneration, cleanup]);
 
@@ -92,24 +108,77 @@ export function useNewsPlayback(tenantSlug: string) {
         }
         return;
       }
-      const a = new Audio(blobUrl);
-      audioRef.current = a;
+      if (blobUrlRef.current && blobUrlRef.current !== blobUrl) {
+        try {
+          URL.revokeObjectURL(blobUrlRef.current);
+        } catch {
+          /* ignore */
+        }
+      }
+      blobUrlRef.current = blobUrl;
+
+      const a = getAudioEl();
+      try {
+        a.pause();
+        a.src = blobUrl;
+        a.load();
+      } catch {
+        /* ignore */
+      }
+
       const done = () => {
         if (token !== playbackGenRef.current) return;
-        cleanup();
+        stopHtmlAudio();
+        if (blobUrlRef.current === blobUrl) {
+          try {
+            URL.revokeObjectURL(blobUrl);
+          } catch {
+            /* ignore */
+          }
+          blobUrlRef.current = null;
+        }
         onEnd();
       };
+
       a.onended = () => done();
       a.onerror = () => done();
       void a.play().catch(() => done());
     },
-    [cleanup]
+    [getAudioEl, stopHtmlAudio]
   );
 
-  /**
-   * Um artigo com token fixo (não incrementa geração).
-   * Usado por playOne e por playSequential com o mesmo token em toda a fila.
-   */
+  const playUrlOnSameElement = useCallback(
+    (src: string, token: number, onEnd: () => void, onFallback: () => void) => {
+      const a = getAudioEl();
+      try {
+        a.pause();
+        a.src = src;
+        a.load();
+      } catch {
+        /* ignore */
+      }
+
+      const finishOk = () => {
+        if (token !== playbackGenRef.current) return;
+        stopHtmlAudio();
+        onEnd();
+      };
+
+      a.onended = () => finishOk();
+      a.onerror = () => {
+        if (token !== playbackGenRef.current) return;
+        stopHtmlAudio();
+        onFallback();
+      };
+      void a.play().catch(() => {
+        if (token !== playbackGenRef.current) return;
+        stopHtmlAudio();
+        onFallback();
+      });
+    },
+    [getAudioEl, stopHtmlAudio]
+  );
+
   const playOneWithToken = useCallback(
     (item: NewsItem, token: number, onEnd: () => void) => {
       cancelRobotSpeech();
@@ -122,54 +191,42 @@ export function useNewsPlayback(tenantSlug: string) {
       const preGenUrl = item.audioUrl?.trim();
       if (preGenUrl) {
         const src = resolveAudioSrc(preGenUrl);
-        const a = new Audio(src);
-        audioRef.current = a;
 
         const fallbackTts = () => {
           if (token !== playbackGenRef.current) return;
-          stopHtmlAudio();
-          void ttsToBlob(speechText(item), tenantSlug).then((blobUrl) => {
+          const ac = new AbortController();
+          ttsAbortRef.current = ac;
+          void ttsToBlob(speechText(item), tenantSlug, ac.signal).then((blobUrl) => {
             if (token !== playbackGenRef.current) {
               if (blobUrl) URL.revokeObjectURL(blobUrl);
               return;
             }
             if (blobUrl) {
-              blobUrlRef.current = blobUrl;
               playBlobUrl(blobUrl, token, finish);
             } else speakRobot(speechText(item), finish);
           });
         };
 
-        a.onended = () => {
-          if (token !== playbackGenRef.current) return;
-          stopHtmlAudio();
-          finish();
-        };
-        a.onerror = () => {
-          fallbackTts();
-        };
-        void a.play().catch(() => {
-          fallbackTts();
-        });
+        playUrlOnSameElement(src, token, finish, fallbackTts);
         return;
       }
 
+      const ac = new AbortController();
+      ttsAbortRef.current = ac;
       const text = speechText(item);
-      void ttsToBlob(text, tenantSlug).then((blobUrl) => {
+      void ttsToBlob(text, tenantSlug, ac.signal).then((blobUrl) => {
         if (token !== playbackGenRef.current) {
           if (blobUrl) URL.revokeObjectURL(blobUrl);
           return;
         }
         if (blobUrl) {
-          blobUrlRef.current = blobUrl;
           playBlobUrl(blobUrl, token, finish);
         } else speakRobot(text, finish);
       });
     },
-    [cleanup, playBlobUrl, stopHtmlAudio, tenantSlug]
+    [cleanup, playBlobUrl, playUrlOnSameElement, tenantSlug]
   );
 
-  /** Reproduz um artigo: MP3 pré-gravado → ElevenLabs real-time → navegador */
   const playOne = useCallback(
     (item: NewsItem, onEnd: () => void) => {
       const token = bumpPlaybackGeneration();
@@ -178,10 +235,6 @@ export function useNewsPlayback(tenantSlug: string) {
     [bumpPlaybackGeneration, playOneWithToken]
   );
 
-  /**
-   * Vários artigos em sequência — cada um usa o MP3 da notícia quando existir,
-   * alinhado aos títulos mostrados na tela. Uma única geração de playback para não cortar o áudio.
-   */
   const playSequential = useCallback(
     (items: NewsItem[], onEnd: () => void) => {
       if (!items.length) {
@@ -204,10 +257,6 @@ export function useNewsPlayback(tenantSlug: string) {
     [bumpPlaybackGeneration, playOneWithToken]
   );
 
-  /**
-   * Tenta reproduzir uma URL de áudio pré-gravado.
-   * Se falhar, gera o áudio via ElevenLabs com `fallbackText`.
-   */
   const playUrl = useCallback(
     (url: string, fallbackText: string, onEnd: () => void) => {
       const token = bumpPlaybackGeneration();
@@ -219,36 +268,27 @@ export function useNewsPlayback(tenantSlug: string) {
       };
 
       const src = resolveAudioSrc(url);
-      const a = new Audio(src);
-      audioRef.current = a;
 
       const fallbackTts = () => {
         if (token !== playbackGenRef.current) return;
-        stopHtmlAudio();
-        void ttsToBlob(fallbackText, tenantSlug).then((blobUrl) => {
+        const ac = new AbortController();
+        ttsAbortRef.current = ac;
+        void ttsToBlob(fallbackText, tenantSlug, ac.signal).then((blobUrl) => {
           if (token !== playbackGenRef.current) {
             if (blobUrl) URL.revokeObjectURL(blobUrl);
             return;
           }
           if (blobUrl) {
-            blobUrlRef.current = blobUrl;
             playBlobUrl(blobUrl, token, finish);
           } else speakRobot(fallbackText, finish);
         });
       };
 
-      a.onended = () => {
-        if (token !== playbackGenRef.current) return;
-        stopHtmlAudio();
-        finish();
-      };
-      a.onerror = () => fallbackTts();
-      void a.play().catch(() => fallbackTts());
+      playUrlOnSameElement(src, token, finish, fallbackTts);
     },
-    [bumpPlaybackGeneration, cleanup, playBlobUrl, stopHtmlAudio, tenantSlug]
+    [bumpPlaybackGeneration, cleanup, playBlobUrl, playUrlOnSameElement, tenantSlug]
   );
 
-  /** Reproduz uma lista de frases em sequência: ElevenLabs (texto unido) → navegador */
   const playParts = useCallback(
     (parts: string[], onEnd: () => void) => {
       const token = bumpPlaybackGeneration();
@@ -259,14 +299,15 @@ export function useNewsPlayback(tenantSlug: string) {
         if (token === playbackGenRef.current) onEnd();
       };
 
+      const ac = new AbortController();
+      ttsAbortRef.current = ac;
       const joined = parts.join(" ");
-      void ttsToBlob(joined, tenantSlug).then((blobUrl) => {
+      void ttsToBlob(joined, tenantSlug, ac.signal).then((blobUrl) => {
         if (token !== playbackGenRef.current) {
           if (blobUrl) URL.revokeObjectURL(blobUrl);
           return;
         }
         if (blobUrl) {
-          blobUrlRef.current = blobUrl;
           playBlobUrl(blobUrl, token, finish);
         } else speakRobotParts(parts, finish);
       });
@@ -274,7 +315,6 @@ export function useNewsPlayback(tenantSlug: string) {
     [bumpPlaybackGeneration, cleanup, playBlobUrl, tenantSlug]
   );
 
-  /** Fala um texto simples: ElevenLabs real-time → navegador */
   const speak = useCallback(
     (text: string, onEnd: () => void) => {
       const token = bumpPlaybackGeneration();
@@ -285,13 +325,14 @@ export function useNewsPlayback(tenantSlug: string) {
         if (token === playbackGenRef.current) onEnd();
       };
 
-      void ttsToBlob(text, tenantSlug).then((blobUrl) => {
+      const ac = new AbortController();
+      ttsAbortRef.current = ac;
+      void ttsToBlob(text, tenantSlug, ac.signal).then((blobUrl) => {
         if (token !== playbackGenRef.current) {
           if (blobUrl) URL.revokeObjectURL(blobUrl);
           return;
         }
         if (blobUrl) {
-          blobUrlRef.current = blobUrl;
           playBlobUrl(blobUrl, token, finish);
         } else speakRobot(text, finish);
       });

@@ -43,6 +43,11 @@ export function CityExperience({ tenant, newsItems }: CityExperienceProps) {
   /** Só enquanto true o reconhecimento fica ativo — um toque = uma pergunta (sem microfone sempre ligado). */
   const [sessionArmed, setSessionArmed] = useState(false);
   const lastPickRef = useRef<number>(0);
+  /** Evita processar o mesmo comando de voz duas vezes (Chrome costuma disparar onresult repetido). */
+  const lastUtteranceRef = useRef<{ text: string; at: number }>({
+    text: "",
+    at: 0,
+  });
   const { playOne, playSequential, speak, cancelPlayback } =
     useNewsPlayback(tenant.slug);
 
@@ -65,7 +70,7 @@ export function CityExperience({ tenant, newsItems }: CityExperienceProps) {
       if (now - lastPickRef.current < 900) return;
       lastPickRef.current = now;
 
-      cancelRobotSpeech();
+      cancelPlayback();
 
       const intent = parseVoiceIntent(text);
 
@@ -157,17 +162,29 @@ export function CityExperience({ tenant, newsItems }: CityExperienceProps) {
         speak(intro, () => playSequential(slice, endPlayback));
       }
     },
-    [endPlayback, newsItems, playOne, playSequential, speak]
+    [cancelPlayback, endPlayback, newsItems, playOne, playSequential, speak]
   );
 
   const handleUtterance = useCallback(
     (text: string) => {
+      const trimmed = text.trim();
+      if (!trimmed) return;
+
+      const t = Date.now();
+      if (
+        trimmed === lastUtteranceRef.current.text &&
+        t - lastUtteranceRef.current.at < 2800
+      ) {
+        return;
+      }
+      lastUtteranceRef.current = { text: trimmed, at: t };
+
       setSessionArmed(false);
       cancelPlayback();
       setPlaying(true);
       setCaptionText(LIA_WAIT_ACKNOWLEDGMENT);
       speak(LIA_WAIT_ACKNOWLEDGMENT, () => {
-        processCommand(text);
+        processCommand(trimmed);
       });
     },
     [cancelPlayback, processCommand, speak]
