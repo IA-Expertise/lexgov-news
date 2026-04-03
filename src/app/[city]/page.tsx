@@ -2,6 +2,7 @@ import Link from "next/link";
 import type { Metadata } from "next";
 import { CityExperience } from "@/components/CityExperience";
 import { getTenantBySlug, tenantSlugs } from "@/config/tenants";
+import { getNewsForTenant } from "@/lib/newsStore";
 
 type Props = { params: { city: string } };
 
@@ -18,7 +19,7 @@ export function generateMetadata({ params }: Props): Metadata {
   };
 }
 
-export default function CityPage({ params }: Props) {
+export default async function CityPage({ params }: Props) {
   const { city } = params;
   const tenant = getTenantBySlug(city);
 
@@ -57,5 +58,7 @@ export default function CityPage({ params }: Props) {
     );
   }
 
-  return <CityExperience tenant={tenant} />;
+  const newsItems = await getNewsForTenant(tenant.slug);
+
+  return <CityExperience tenant={tenant} newsItems={newsItems} />;
 }

@@ -1,0 +1,24 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+/// Itens ingeridos do RSS por cidade (B). Fallback: mocks em `src/mocks/news.ts`.
+model NewsArticle {
+  id          String    @id @default(cuid())
+  tenantSlug  String
+  category    String
+  title       String
+  summary     String    @db.Text
+  imageUrl    String    @default("")
+  sourceUrl   String    @unique
+  publishedAt DateTime?
+  createdAt   DateTime  @default(now())
+
+  @@index([tenantSlug])
+  @@map("news_articles")
+}

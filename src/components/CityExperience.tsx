@@ -6,14 +6,16 @@ import { AnimatePresence, motion } from "framer-motion";
 import type { TenantConfig } from "@/config/tenants";
 import { LEXGOV_BRAND_BLUE } from "@/config/tenants";
 import { CATEGORY_COLORS, CATEGORY_LABELS } from "@/lib/categories";
-import type { NewsCategory } from "@/mocks/news";
+import type { NewsItem, NewsCategory } from "@/mocks/news";
 import { getNewsByTenantAndCategory } from "@/mocks/news";
 import { useVoiceCategory } from "@/hooks/useVoiceCategory";
+import { cancelRobotSpeech, speakRobot } from "@/lib/robotSpeech";
 import { Captions } from "./Captions";
 import { Orb, type OrbState } from "./Orb";
 
 type CityExperienceProps = {
   tenant: TenantConfig;
+  newsItems: NewsItem[];
 };
 
 function orbStateFromVoice(
@@ -25,26 +27,45 @@ function orbStateFromVoice(
   return "idle";
 }
 
-export function CityExperience({ tenant }: CityExperienceProps) {
+/** Título + primeira frase do resumo para leitura em voz robotizada */
+function speechText(item: NewsItem): string {
+  const sentence = item.summary.split(/(?<=[.!?])\s+/)[0]?.trim() ?? item.summary;
+  return `${item.title}. ${sentence}`.slice(0, 900);
+}
+
+function pickNewsForCategory(
+  tenantSlug: string,
+  category: NewsCategory,
+  newsItems: NewsItem[]
+): NewsItem | undefined {
+  return (
+    newsItems.find((n) => n.category === category) ??
+    getNewsByTenantAndCategory(tenantSlug, category)
+  );
+}
+
+export function CityExperience({ tenant, newsItems }: CityExperienceProps) {
   const [orbHue, setOrbHue] = useState<string>(LEXGOV_BRAND_BLUE);
   const [playing, setPlaying] = useState(false);
   const [reflectionUrl, setReflectionUrl] = useState<string | null>(null);
   const [captionText, setCaptionText] = useState(
-    `Olá, sou a LIA. Atualizações oficiais de ${tenant.name}. Diga em voz alta: Saúde, Obras ou Educação.`
+    `Olá, sou a LIA. Atualizações oficiais de ${tenant.name}. Toque em “Ativar microfone” e diga: Saúde, Obras ou Educação.`
   );
-  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [micStarted, setMicStarted] = useState(false);
   const lastPickRef = useRef<number>(0);
 
-  const clearTimer = useCallback(() => {
-    if (timerRef.current) {
-      clearTimeout(timerRef.current);
-      timerRef.current = null;
-    }
+  useEffect(() => {
+    return () => {
+      cancelRobotSpeech();
+    };
   }, []);
 
-  useEffect(() => {
-    return () => clearTimer();
-  }, [clearTimer]);
+  const endPlayback = useCallback(() => {
+    setPlaying(false);
+    setCaptionText(
+      `Fale outro tema: ${CATEGORY_LABELS.saude}, ${CATEGORY_LABELS.obras} ou ${CATEGORY_LABELS.educacao}.`
+    );
+  }, []);
 
   const handleCategory = useCallback(
     (category: NewsCategory) => {
@@ -52,8 +73,9 @@ export function CityExperience({ tenant }: CityExperienceProps) {
       if (now - lastPickRef.current < 900) return;
       lastPickRef.current = now;
 
-      clearTimer();
-      const item = getNewsByTenantAndCategory(tenant.slug, category);
+      cancelRobotSpeech();
+
+      const item = pickNewsForCategory(tenant.slug, category, newsItems);
       if (!item) return;
 
       setOrbHue(CATEGORY_COLORS[category]);
@@ -61,21 +83,12 @@ export function CityExperience({ tenant }: CityExperienceProps) {
       setPlaying(true);
       setCaptionText(item.title);
 
-      const words = item.title.trim().split(/\s+/).length;
-      const ms = Math.min(22000, Math.max(4500, words * 420));
-
-      timerRef.current = setTimeout(() => {
-        setPlaying(false);
-        setCaptionText(
-          `Fale outro tema: ${CATEGORY_LABELS.saude}, ${CATEGORY_LABELS.obras} ou ${CATEGORY_LABELS.educacao}.`
-        );
-        timerRef.current = null;
-      }, ms);
+      speakRobot(speechText(item), endPlayback);
     },
-    [clearTimer, tenant.slug]
+    [endPlayback, newsItems, tenant.slug]
   );
 
-  const voiceEnabled = !playing;
+  const voiceEnabled = !playing && micStarted;
 
   const { status: voiceStatus } = useVoiceCategory({
     enabled: voiceEnabled,
@@ -84,6 +97,13 @@ export function CityExperience({ tenant }: CityExperienceProps) {
 
   const listening = voiceStatus === "listening";
   const orbVisualState = orbStateFromVoice(listening, playing);
+
+  const onActivateMic = useCallback(() => {
+    setMicStarted(true);
+    setCaptionText(
+      `Olá, sou a LIA. Atualizações oficiais de ${tenant.name}. Diga: Saúde, Obras ou Educação.`
+    );
+  }, [tenant.name]);
 
   return (
     <div className="flex h-[100dvh] flex-col overflow-hidden bg-black text-white selection:bg-white/20">
@@ -129,17 +149,29 @@ export function CityExperience({ tenant }: CityExperienceProps) {
         </AnimatePresence>
       </main>
 
-      <footer className="pointer-events-none shrink-0 px-4 pb-[max(1rem,env(safe-area-inset-bottom))] pt-0">
-        <p className="text-center text-[10px] leading-relaxed text-white/42 sm:text-[11px]">
-          Comando por voz ·{" "}
-          {voiceStatus === "unsupported"
-            ? "Use Chrome ou Edge no celular para falar com a LIA."
-            : listening
-              ? "Escutando…"
-              : playing
-                ? "Reproduzindo…"
-                : "Diga: Saúde, Obras ou Educação"}
-        </p>
+      <footer className="shrink-0 px-4 pb-[max(1rem,env(safe-area-inset-bottom))] pt-0">
+        {!micStarted ? (
+          <div className="pointer-events-auto flex justify-center">
+            <button
+              type="button"
+              onClick={onActivateMic}
+              className="rounded-full border border-white/25 bg-white/10 px-6 py-2.5 text-xs font-medium text-white backdrop-blur-sm transition-colors hover:bg-white/15 focus:outline-none focus-visible:ring-2 focus-visible:ring-white/80 focus-visible:ring-offset-2 focus-visible:ring-offset-black sm:text-sm"
+            >
+              Ativar microfone
+            </button>
+          </div>
+        ) : (
+          <p className="pointer-events-none text-center text-[10px] leading-relaxed text-white/42 sm:text-[11px]">
+            Voz robotizada · Comando por voz ·{" "}
+            {voiceStatus === "unsupported"
+              ? "Use Chrome ou Edge para falar com a LIA."
+              : listening
+                ? "Escutando…"
+                : playing
+                  ? "LIA está falando…"
+                  : "Diga: Saúde, Obras ou Educação"}
+          </p>
+        )}
       </footer>
     </div>
   );
