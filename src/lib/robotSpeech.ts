@@ -59,6 +59,17 @@ export function cancelRobotSpeech(): void {
   window.speechSynthesis.cancel();
 }
 
+function configureUtterance(text: string): SpeechSynthesisUtterance {
+  const u = new SpeechSynthesisUtterance(text);
+  u.lang = "pt-BR";
+  u.rate = 1.08;
+  u.pitch = 1.5;
+  u.volume = 1;
+  const v = pickPtBrVoice();
+  if (v) u.voice = v;
+  return u;
+}
+
 export function speakRobot(
   text: string,
   onEnd?: () => void
@@ -71,17 +82,38 @@ export function speakRobot(
   cancelRobotSpeech();
 
   const speak = (): void => {
-    const u = new SpeechSynthesisUtterance(text);
-    u.lang = "pt-BR";
-    u.rate = 1.08;
-    u.pitch = 1.5;
-    u.volume = 1;
-    const v = pickPtBrVoice();
-    if (v) u.voice = v;
+    const u = configureUtterance(text);
     u.onend = () => onEnd?.();
     u.onerror = () => onEnd?.();
     window.speechSynthesis.speak(u);
   };
 
   ensureVoices(speak);
+}
+
+/** Várias frases em sequência (ex.: lista de manchetes) sem cancelar entre elas */
+export function speakRobotParts(parts: string[], onEnd?: () => void): void {
+  if (!isBrowser()) {
+    onEnd?.();
+    return;
+  }
+  if (parts.length === 0) {
+    onEnd?.();
+    return;
+  }
+
+  cancelRobotSpeech();
+
+  const run = (i: number): void => {
+    if (i >= parts.length) {
+      onEnd?.();
+      return;
+    }
+    const u = configureUtterance(parts[i]);
+    u.onend = () => run(i + 1);
+    u.onerror = () => run(i + 1);
+    window.speechSynthesis.speak(u);
+  };
+
+  ensureVoices(() => run(0));
 }

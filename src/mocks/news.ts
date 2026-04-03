@@ -8,6 +8,8 @@ export type NewsItem = {
   summary: string;
   audioUrl: string;
   imageUrl: string;
+  /** ISO 8601 quando vier do banco (ingestão RSS) */
+  publishedAt?: string;
 };
 
 export const newsItems: NewsItem[] = [

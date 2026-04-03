@@ -1,13 +1,13 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { NewsCategory } from "@/mocks/news";
 
 export type VoiceStatus = "idle" | "listening" | "unsupported";
 
-type UseVoiceCategoryOptions = {
+type UseVoiceUtteranceOptions = {
   enabled: boolean;
-  onCategory: (category: NewsCategory) => void;
+  /** Texto completo reconhecido — a intenção é interpretada no componente (voiceIntent) */
+  onUtterance: (text: string) => void;
 };
 
 /** Tipagem mínima — APIs de fala não estão em todos os ambientes de build */
@@ -28,20 +28,6 @@ type SpeechRecognitionEventLike = {
   results: ArrayLike<{ 0?: { transcript?: string } }>;
 };
 
-function stripAccents(s: string): string {
-  return s.normalize("NFD").replace(/[\u0300-\u036f]/g, "");
-}
-
-export function matchCategoryFromText(raw: string): NewsCategory | null {
-  const t = stripAccents(raw.toLowerCase());
-
-  if (/\b(saude|hospital|vacina|dengue|posto|ubs)\b/.test(t)) return "saude";
-  if (/\b(obras|obra|paviment|drenagem|via|infra)\b/.test(t)) return "obras";
-  if (/\b(educacao|escola|matricula|creche|ensino|aluno)\b/.test(t))
-    return "educacao";
-  return null;
-}
-
 function createRecognition(): SpeechRecLike | null {
   if (typeof window === "undefined") return null;
   const w = window as unknown as {
@@ -52,16 +38,16 @@ function createRecognition(): SpeechRecLike | null {
   return Ctor ? new Ctor() : null;
 }
 
-export function useVoiceCategory({
+export function useVoiceUtterance({
   enabled,
-  onCategory,
-}: UseVoiceCategoryOptions) {
+  onUtterance,
+}: UseVoiceUtteranceOptions) {
   const [status, setStatus] = useState<VoiceStatus>("idle");
   const [lastHeard, setLastHeard] = useState<string>("");
   const recRef = useRef<SpeechRecLike | null>(null);
   const enabledRef = useRef(enabled);
-  const onCategoryRef = useRef(onCategory);
-  onCategoryRef.current = onCategory;
+  const onUtteranceRef = useRef(onUtterance);
+  onUtteranceRef.current = onUtterance;
   enabledRef.current = enabled;
 
   const stop = useCallback(() => {
@@ -93,12 +79,11 @@ export function useVoiceCategory({
       const text = last?.[0]?.transcript?.trim() ?? "";
       if (!text) return;
       setLastHeard(text);
-      const cat = matchCategoryFromText(text);
-      if (cat) onCategoryRef.current(cat);
+      onUtteranceRef.current(text);
     };
 
     rec.onerror = () => {
-      /* permissão / rede — tenta de novo no onend */
+      /* permissão / rede */
     };
 
     rec.onend = () => {
@@ -140,3 +125,6 @@ export function useVoiceCategory({
 
   return { status, lastHeard, start, stop };
 }
+
+/** @deprecated use useVoiceUtterance */
+export const useVoiceCategory = useVoiceUtterance;

@@ -8,8 +8,13 @@ import { LEXGOV_BRAND_BLUE } from "@/config/tenants";
 import { CATEGORY_COLORS, CATEGORY_LABELS } from "@/lib/categories";
 import type { NewsItem, NewsCategory } from "@/mocks/news";
 import { getNewsByTenantAndCategory } from "@/mocks/news";
-import { useVoiceCategory } from "@/hooks/useVoiceCategory";
-import { cancelRobotSpeech, speakRobot } from "@/lib/robotSpeech";
+import {
+  filterNewsByTopic,
+  parseVoiceIntent,
+  sortNewsByRecency,
+} from "@/lib/voiceIntent";
+import { useVoiceUtterance } from "@/hooks/useVoiceCategory";
+import { cancelRobotSpeech, speakRobot, speakRobotParts } from "@/lib/robotSpeech";
 import { Captions } from "./Captions";
 import { Orb, type OrbState } from "./Orb";
 
@@ -27,7 +32,6 @@ function orbStateFromVoice(
   return "idle";
 }
 
-/** Título + primeira frase do resumo para leitura em voz robotizada */
 function speechText(item: NewsItem): string {
   const sentence = item.summary.split(/(?<=[.!?])\s+/)[0]?.trim() ?? item.summary;
   return `${item.title}. ${sentence}`.slice(0, 900);
@@ -49,7 +53,7 @@ export function CityExperience({ tenant, newsItems }: CityExperienceProps) {
   const [playing, setPlaying] = useState(false);
   const [reflectionUrl, setReflectionUrl] = useState<string | null>(null);
   const [captionText, setCaptionText] = useState(
-    `Olá, sou a LIA. Atualizações oficiais de ${tenant.name}. Toque em “Ativar microfone” e diga: Saúde, Obras ou Educação.`
+    `Olá, sou a LIA. Atualizações oficiais de ${tenant.name}. Toque em “Ativar microfone” e fale o que precisa.`
   );
   const [micStarted, setMicStarted] = useState(false);
   const lastPickRef = useRef<number>(0);
@@ -63,36 +67,107 @@ export function CityExperience({ tenant, newsItems }: CityExperienceProps) {
   const endPlayback = useCallback(() => {
     setPlaying(false);
     setCaptionText(
-      `Fale outro tema: ${CATEGORY_LABELS.saude}, ${CATEGORY_LABELS.obras} ou ${CATEGORY_LABELS.educacao}.`
+      `Peça as últimas notícias, um tema — por exemplo esportes — ou ${CATEGORY_LABELS.saude}, ${CATEGORY_LABELS.obras} ou ${CATEGORY_LABELS.educacao}.`
     );
   }, []);
 
-  const handleCategory = useCallback(
-    (category: NewsCategory) => {
+  const handleUtterance = useCallback(
+    (text: string) => {
       const now = Date.now();
       if (now - lastPickRef.current < 900) return;
       lastPickRef.current = now;
 
       cancelRobotSpeech();
 
-      const item = pickNewsForCategory(tenant.slug, category, newsItems);
-      if (!item) return;
+      const intent = parseVoiceIntent(text);
 
-      setOrbHue(CATEGORY_COLORS[category]);
-      setReflectionUrl(item.imageUrl);
-      setPlaying(true);
-      setCaptionText(item.title);
+      if (intent.kind === "unknown") {
+        setPlaying(true);
+        setCaptionText(
+          "Não entendi. Diga, por exemplo: últimas notícias, as três mais recentes, ou notícias sobre esportes."
+        );
+        speakRobot(
+          "Não entendi. Experimente pedir as últimas notícias, ou um tema como esportes.",
+          endPlayback
+        );
+        return;
+      }
 
-      speakRobot(speechText(item), endPlayback);
+      if (intent.kind === "category") {
+        const item = pickNewsForCategory(
+          tenant.slug,
+          intent.category,
+          newsItems
+        );
+        if (!item) return;
+
+        setOrbHue(CATEGORY_COLORS[intent.category]);
+        setReflectionUrl(item.imageUrl);
+        setPlaying(true);
+        setCaptionText(item.title);
+        speakRobot(speechText(item), endPlayback);
+        return;
+      }
+
+      if (intent.kind === "latest") {
+        const sorted = sortNewsByRecency(newsItems);
+        const slice = sorted.slice(0, intent.count);
+        if (!slice.length) {
+          speakRobot("Não há notícias disponíveis no momento.", endPlayback);
+          return;
+        }
+
+        setOrbHue(LEXGOV_BRAND_BLUE);
+        setReflectionUrl(slice[0].imageUrl);
+        setPlaying(true);
+        setCaptionText(slice.map((i) => i.title).join(" · "));
+
+        const intro = `Aqui estão as ${slice.length} notícias mais recentes.`;
+        const bullets = slice.map(
+          (it, i) => `Notícia ${i + 1}. ${it.title}.`
+        );
+        speakRobotParts([intro, ...bullets], endPlayback);
+        return;
+      }
+
+      if (intent.kind === "search") {
+        const found = filterNewsByTopic(newsItems, intent.query);
+        if (!found.length) {
+          setPlaying(true);
+          setCaptionText(`Nada encontrado sobre “${intent.query}”.`);
+          speakRobot(
+            `Não encontrei notícias sobre ${intent.query}. Tente outras palavras.`,
+            endPlayback
+          );
+          return;
+        }
+
+        const first = found[0];
+        const hue =
+          CATEGORY_COLORS[first.category as NewsCategory] ?? LEXGOV_BRAND_BLUE;
+
+        setOrbHue(hue);
+        setReflectionUrl(first.imageUrl);
+        setPlaying(true);
+        setCaptionText(first.title);
+
+        if (found.length === 1) {
+          speakRobot(speechText(first), endPlayback);
+          return;
+        }
+
+        const intro = `Encontrei ${found.length} resultados. Segue a primeira.`;
+        speakRobotParts([intro, speechText(first)], endPlayback);
+      }
     },
     [endPlayback, newsItems, tenant.slug]
   );
 
   const voiceEnabled = !playing && micStarted;
 
-  const { status: voiceStatus } = useVoiceCategory({
+  const { status: voiceStatus } = useVoiceUtterance({
     enabled: voiceEnabled,
-    onCategory: handleCategory,
+    onUtterance: handleUtterance,
   });
 
   const listening = voiceStatus === "listening";
@@ -101,9 +176,9 @@ export function CityExperience({ tenant, newsItems }: CityExperienceProps) {
   const onActivateMic = useCallback(() => {
     setMicStarted(true);
     setCaptionText(
-      `Olá, sou a LIA. Atualizações oficiais de ${tenant.name}. Diga: Saúde, Obras ou Educação.`
+      `Olá. Peça as últimas notícias, fale um tema como esportes, ou diga ${CATEGORY_LABELS.saude}, ${CATEGORY_LABELS.obras} ou ${CATEGORY_LABELS.educacao}.`
     );
-  }, [tenant.name]);
+  }, []);
 
   return (
     <div className="flex h-[100dvh] flex-col overflow-hidden bg-black text-white selection:bg-white/20">
@@ -162,14 +237,14 @@ export function CityExperience({ tenant, newsItems }: CityExperienceProps) {
           </div>
         ) : (
           <p className="pointer-events-none text-center text-[10px] leading-relaxed text-white/42 sm:text-[11px]">
-            Voz robotizada · Comando por voz ·{" "}
+            Voz · Últimas notícias · temas (ex.: esportes) · Saúde, Obras, Educação ·{" "}
             {voiceStatus === "unsupported"
-              ? "Use Chrome ou Edge para falar com a LIA."
+              ? "Use Chrome ou Edge."
               : listening
                 ? "Escutando…"
                 : playing
                   ? "LIA está falando…"
-                  : "Diga: Saúde, Obras ou Educação"}
+                  : ""}
           </p>
         )}
       </footer>
