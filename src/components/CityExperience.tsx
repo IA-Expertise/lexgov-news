@@ -250,7 +250,7 @@ export function CityExperience({ tenant, newsItems }: CityExperienceProps) {
                 ? "Escutando…"
                 : playing
                   ? "LIA está falando…"
-                  : ""}
+                  : "Pronto para ouvir"}
           </p>
         )}
       </footer>

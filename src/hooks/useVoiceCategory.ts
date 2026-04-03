@@ -78,17 +78,30 @@ export function useVoiceUtterance({
       const last = ev.results[ev.results.length - 1];
       const text = last?.[0]?.transcript?.trim() ?? "";
       if (!text) return;
+      // Fecha o microfone imediatamente — impede o onend de reiniciar
+      // enquanto a LIA responde. Quando o áudio terminar (enabled volta a true)
+      // o useEffect chama start() novamente de forma controlada.
+      rec.onend = null;
+      rec.onerror = null;
+      recRef.current = null;
+      try { rec.abort(); } catch { /* ignore */ }
+      setStatus("idle");
       setLastHeard(text);
       onUtteranceRef.current(text);
     };
 
     rec.onerror = () => {
-      /* permissão / rede */
+      if (recRef.current !== rec) return;
+      setStatus("idle");
     };
 
     rec.onend = () => {
       if (recRef.current !== rec) return;
-      if (!enabledRef.current) return;
+      if (!enabledRef.current) {
+        setStatus("idle");
+        return;
+      }
+      // Reinicia apenas se nenhum resultado foi capturado (silêncio/timeout)
       try {
         rec.start();
       } catch {
