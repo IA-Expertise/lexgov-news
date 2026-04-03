@@ -11,6 +11,11 @@ const parser = new Parser({
   },
 });
 
+const FETCH_HEADERS = {
+  "User-Agent": "LexGov-News/1.0 (RSS ingestão municipal)",
+  Accept: "text/html,application/xhtml+xml",
+};
+
 function inferCategory(title: string, body: string): NewsCategory {
   const t = `${title} ${body}`.toLowerCase();
   if (/(saúde|saude|hospital|vacina|dengue|posto|ubs)/.test(t)) return "saude";
@@ -58,6 +63,66 @@ function stripHtml(s: string): string {
   return s.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
 }
 
+/** Parágrafos <p> com texto útil (>50 chars após limpar HTML) */
+function extractArticleParagraphs(html: string): string {
+  const parts: string[] = [];
+  const re = /<p[^>]*>([\s\S]*?)<\/p>/gi;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(html)) !== null) {
+    const text = stripHtml(m[1] ?? "");
+    if (text.length > 50) parts.push(text);
+  }
+  return parts.join(" ").trim();
+}
+
+function isLouveiraConteudoUrl(url: string): boolean {
+  try {
+    const u = new URL(url);
+    return (
+      u.hostname === "louveira.sp.gov.br" && u.pathname.startsWith("/conteudo/")
+    );
+  } catch {
+    return false;
+  }
+}
+
+async function fetchWithTimeout(
+  url: string,
+  timeoutMs: number
+): Promise<Response> {
+  const ctrl = new AbortController();
+  const t = setTimeout(() => ctrl.abort(), timeoutMs);
+  try {
+    return await fetch(url, {
+      signal: ctrl.signal,
+      headers: FETCH_HEADERS,
+    });
+  } finally {
+    clearTimeout(t);
+  }
+}
+
+/**
+ * Busca HTML da matéria e extrai texto dos <p> (Louveira).
+ * Falha/timeout → retorna null (caller usa título).
+ */
+export async function enrichSummaryFromLouveiraArticle(
+  sourceUrl: string
+): Promise<string | null> {
+  if (!isLouveiraConteudoUrl(sourceUrl)) return null;
+
+  try {
+    const res = await fetchWithTimeout(sourceUrl, 5000);
+    if (!res.ok) return null;
+    const html = await res.text();
+    const text = extractArticleParagraphs(html);
+    if (text.length < 50) return null;
+    return text.slice(0, 1500);
+  } catch {
+    return null;
+  }
+}
+
 export type ParsedRssItem = {
   title: string;
   summary: string;
@@ -78,7 +143,13 @@ export async function fetchRssItems(rssUrl: string): Promise<ParsedRssItem[]> {
 
     const raw =
       item.contentSnippet ?? item.content ?? item.summary ?? "";
-    const summary = stripHtml(raw).slice(0, 1200) || title;
+    let summary = stripHtml(raw).slice(0, 1200) || title;
+
+    if (summary.trim() === title.trim()) {
+      const enriched = await enrichSummaryFromLouveiraArticle(link);
+      summary = enriched ?? title;
+    }
+
     const imageUrl = firstImageFromItem(item);
     const category = inferCategory(title, summary);
     const publishedAt = item.pubDate ? new Date(item.pubDate) : null;

@@ -9,6 +9,8 @@ import { fetchRssItems } from "@/lib/rssIngest";
  * Body opcional: { "tenantSlug": "louveira" } — omite para todos os tenants.
  *
  * Busca RSS de cada cidade, faz upsert por sourceUrl e grava no PostgreSQL.
+ * O campo `summary` pode vir enriquecido (HTML da matéria em louveira.sp.gov.br/conteudo/…)
+ * quando o feed não traz descrição — ver `enrichSummaryFromLouveiraArticle` em rssIngest.
  */
 export async function POST(request: NextRequest) {
   const secret = process.env.INGEST_SECRET;
