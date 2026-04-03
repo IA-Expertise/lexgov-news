@@ -75,6 +75,21 @@ function extractArticleParagraphs(html: string): string {
   return parts.join(" ").trim();
 }
 
+/**
+ * Condensa texto em até `maxChars` caracteres respeitando fronteiras de frase.
+ * ~300 chars ≈ 20 segundos de fala em português.
+ */
+function condenseSummary(text: string, maxChars = 300): string {
+  if (text.length <= maxChars) return text;
+  const sentences = text.match(/[^.!?]+[.!?]+/g) ?? [text];
+  let result = "";
+  for (const s of sentences) {
+    if ((result + s).length > maxChars) break;
+    result += s + " ";
+  }
+  return result.trim() || text.slice(0, maxChars).trim();
+}
+
 function isLouveiraConteudoUrl(url: string): boolean {
   try {
     const u = new URL(url);
@@ -117,7 +132,7 @@ export async function enrichSummaryFromLouveiraArticle(
     const html = await res.text();
     const text = extractArticleParagraphs(html);
     if (text.length < 50) return null;
-    return text.slice(0, 1500);
+    return condenseSummary(text);
   } catch {
     return null;
   }
@@ -143,7 +158,7 @@ export async function fetchRssItems(rssUrl: string): Promise<ParsedRssItem[]> {
 
     const raw =
       item.contentSnippet ?? item.content ?? item.summary ?? "";
-    let summary = stripHtml(raw).slice(0, 1200) || title;
+    let summary = condenseSummary(stripHtml(raw)) || title;
 
     if (summary.trim() === title.trim()) {
       const enriched = await enrichSummaryFromLouveiraArticle(link);

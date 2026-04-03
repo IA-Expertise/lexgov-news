@@ -33,8 +33,14 @@ function orbStateFromVoice(
 }
 
 function speechText(item: NewsItem): string {
-  const sentence = item.summary.split(/(?<=[.!?])\s+/)[0]?.trim() ?? item.summary;
-  return `${item.title}. ${sentence}`.slice(0, 900);
+  const full = `${item.title}. ${item.summary}`;
+  const sentences = full.match(/[^.!?]+[.!?]+/g) ?? [full];
+  let result = "";
+  for (const s of sentences) {
+    if ((result + s).length > 300) break;
+    result += s + " ";
+  }
+  return result.trim() || full.slice(0, 300);
 }
 
 function pickNewsForCategory(
