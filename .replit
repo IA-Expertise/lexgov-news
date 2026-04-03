@@ -8,8 +8,10 @@ modules = ["nodejs-20", "postgresql-16"]
 [nix]
 channel = "stable-24_05"
 
+# Deploy: o Replit injeta PORT — não fixar -p no script "start" (ver package.json).
+# build gera a app; run só sobe o servidor em modo produção.
 [deployment]
-run = ["sh", "-c", "npm run build && npm run start"]
+run = ["sh", "-c", "npm run start"]
 build = ["sh", "-c", "npm install && npm run build"]
 
 [agent]
