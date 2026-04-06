@@ -3,6 +3,7 @@ import type { Metadata } from "next";
 import { CityExperience } from "@/components/CityExperience";
 import { getTenantBySlug, tenantSlugs } from "@/config/tenants";
 import { getNewsForTenant } from "@/lib/newsStore";
+import { getLiaGreetingUrl } from "@/lib/liaGreetingStore";
 
 type Props = { params: { city: string } };
 
@@ -58,7 +59,16 @@ export default async function CityPage({ params }: Props) {
     );
   }
 
-  const newsItems = await getNewsForTenant(tenant.slug);
+  const [newsItems, greetingAudioUrl] = await Promise.all([
+    getNewsForTenant(tenant.slug),
+    getLiaGreetingUrl(tenant.slug),
+  ]);
 
-  return <CityExperience tenant={tenant} newsItems={newsItems} />;
+  return (
+    <CityExperience
+      tenant={tenant}
+      newsItems={newsItems}
+      greetingAudioUrl={greetingAudioUrl}
+    />
+  );
 }

@@ -8,9 +8,16 @@ type OrbProps = {
   state: OrbState;
   imageUrl?: string | null;
   categoryColor: string;
+  /** Rótulo para leitores de tela (estado da LIA). */
+  "aria-label"?: string;
 };
 
-export function Orb({ state, imageUrl, categoryColor }: OrbProps) {
+export function Orb({
+  state,
+  imageUrl,
+  categoryColor,
+  "aria-label": ariaLabel,
+}: OrbProps) {
   const isTalking = state === "talking";
   const isListening = state === "listening";
   const pulse = isTalking || isListening;
@@ -21,7 +28,18 @@ export function Orb({ state, imageUrl, categoryColor }: OrbProps) {
   const ambient = hexToRgba(categoryColor, 0.22);
 
   return (
-    <div className="relative flex w-full max-w-[min(92vw,320px)] flex-col items-center justify-center">
+    <div
+      className="relative flex w-full max-w-[min(92vw,320px)] flex-col items-center justify-center"
+      role="img"
+      aria-label={
+        ariaLabel ??
+        (isTalking
+          ? "Assistente LIA falando"
+          : isListening
+            ? "Assistente LIA ouvindo"
+            : "Assistente LIA em repouso")
+      }
+    >
       {/* Luz difusa no fundo — volume e profundidade */}
       <div
         className="pointer-events-none absolute left-1/2 top-1/2 z-0 h-[min(88vw,380px)] w-[min(88vw,380px)] -translate-x-1/2 -translate-y-[48%] rounded-full blur-[72px]"

@@ -5,23 +5,31 @@ import { Mic } from "lucide-react";
 import { AnimatePresence, motion } from "framer-motion";
 import type { TenantConfig } from "@/config/tenants";
 import { LEXGOV_BRAND_BLUE } from "@/config/tenants";
-import { CATEGORY_COLORS } from "@/lib/categories";
+import { CATEGORY_COLORS, CATEGORY_LABELS } from "@/lib/categories";
 import type { NewsItem, NewsCategory } from "@/mocks/news";
 import {
   filterNewsByTopic,
   parseVoiceIntent,
   sortNewsByRecency,
 } from "@/lib/voiceIntent";
-import { buildLiaIntroScript, LIA_WAIT_ACKNOWLEDGMENT } from "@/lib/liaIntro";
+import {
+  buildIngestGreetingScript,
+  buildLiaClosingLine,
+  buildLiaFoundIntro,
+  LIA_WAIT_ACKNOWLEDGMENT,
+} from "@/lib/liaIntro";
 import { useVoiceUtterance } from "@/hooks/useVoiceCategory";
 import { useNewsPlayback } from "@/hooks/useNewsPlayback";
 import { cancelRobotSpeech } from "@/lib/robotSpeech";
 import { Captions } from "./Captions";
 import { Orb, type OrbState } from "./Orb";
+import { VoiceBrowserHint } from "./VoiceBrowserHint";
 
 type CityExperienceProps = {
   tenant: TenantConfig;
   newsItems: NewsItem[];
+  /** MP3 de saudação gerado na ingestão (`/audio/{slug}/greeting.mp3`). */
+  greetingAudioUrl?: string | null;
 };
 
 function orbStateFromVoice(
@@ -33,22 +41,24 @@ function orbStateFromVoice(
   return "idle";
 }
 
-export function CityExperience({ tenant, newsItems }: CityExperienceProps) {
+export function CityExperience({
+  tenant,
+  newsItems,
+  greetingAudioUrl = null,
+}: CityExperienceProps) {
   const [orbHue, setOrbHue] = useState<string>(LEXGOV_BRAND_BLUE);
   const [playing, setPlaying] = useState(false);
   const [reflectionUrl, setReflectionUrl] = useState<string | null>(null);
   const [captionText, setCaptionText] = useState(
-    `Olá, sou a LIA. Atualizações oficiais de ${tenant.name}. Toque em "Falar com a LIA" para ouvir o que tenho e escolher um tema.`
+    `Olá, sou a LIA. Atualizações oficiais de ${tenant.name}. Toque em "Falar com a LIA" para ouvir o menu e escolher um tema.`
   );
-  /** Só enquanto true o reconhecimento fica ativo — um toque = uma pergunta (sem microfone sempre ligado). */
   const [sessionArmed, setSessionArmed] = useState(false);
   const lastPickRef = useRef<number>(0);
-  /** Evita processar o mesmo comando de voz duas vezes (Chrome costuma disparar onresult repetido). */
   const lastUtteranceRef = useRef<{ text: string; at: number }>({
     text: "",
     at: 0,
   });
-  const { playOne, playSequential, speak, cancelPlayback } =
+  const { playOne, playSequential, playUrl, speak, cancelPlayback } =
     useNewsPlayback(tenant.slug);
 
   useEffect(() => {
@@ -60,7 +70,7 @@ export function CityExperience({ tenant, newsItems }: CityExperienceProps) {
   const endPlayback = useCallback(() => {
     setPlaying(false);
     setCaptionText(
-      'Toque em "Falar com a LIA" quando quiser fazer outra pergunta.'
+      'Microfone desligado. Toque em "Falar com a LIA" para outra pergunta.'
     );
   }, []);
 
@@ -73,11 +83,13 @@ export function CityExperience({ tenant, newsItems }: CityExperienceProps) {
       cancelPlayback();
 
       const intent = parseVoiceIntent(text);
+      const closing = () =>
+        speak(buildLiaClosingLine(tenant.name), endPlayback);
 
       if (intent.kind === "unknown") {
         setPlaying(true);
         setCaptionText(
-          "Não entendi. Diga um tema: saúde, obras, educação, esportes, ou “últimas notícias”."
+          "Não entendi. Diga um tema: saúde, obras, educação, esportes ou “últimas notícias”."
         );
         speak(
           "Não entendi. Experimente dizer saúde, obras, educação, esportes, ou últimas notícias.",
@@ -93,8 +105,11 @@ export function CityExperience({ tenant, newsItems }: CityExperienceProps) {
         const slice = sorted.slice(0, 3);
         if (!slice.length) {
           setPlaying(true);
+          setCaptionText(
+            `Não há notícias de ${CATEGORY_LABELS[intent.category]} neste momento.`
+          );
           speak(
-            `Não há notícias de ${intent.category} na base neste momento.`,
+            `Não há notícias de ${CATEGORY_LABELS[intent.category]} na base neste momento.`,
             endPlayback
           );
           return;
@@ -105,7 +120,16 @@ export function CityExperience({ tenant, newsItems }: CityExperienceProps) {
         setReflectionUrl(first.imageUrl);
         setPlaying(true);
         setCaptionText(slice.map((i) => i.title).join(" · "));
-        playSequential(slice, endPlayback);
+
+        const intro = buildLiaFoundIntro({
+          topicLabel: CATEGORY_LABELS[intent.category],
+          count: slice.length,
+        });
+        speak(intro, () =>
+          playSequential(slice, () => {
+            closing();
+          })
+        );
         return;
       }
 
@@ -115,6 +139,7 @@ export function CityExperience({ tenant, newsItems }: CityExperienceProps) {
         const slice = sorted.slice(0, count);
         if (!slice.length) {
           setPlaying(true);
+          setCaptionText("Não há notícias disponíveis no momento.");
           speak("Não há notícias disponíveis no momento.", endPlayback);
           return;
         }
@@ -123,7 +148,13 @@ export function CityExperience({ tenant, newsItems }: CityExperienceProps) {
         setReflectionUrl(slice[0].imageUrl);
         setPlaying(true);
         setCaptionText(slice.map((i) => i.title).join(" · "));
-        playSequential(slice, endPlayback);
+
+        const intro = buildLiaFoundIntro({ latest: true, count: slice.length });
+        speak(intro, () =>
+          playSequential(slice, () => {
+            closing();
+          })
+        );
         return;
       }
 
@@ -149,20 +180,40 @@ export function CityExperience({ tenant, newsItems }: CityExperienceProps) {
         setPlaying(true);
         setCaptionText(slice.map((i) => i.title).join(" · "));
 
+        const topic = intent.query.trim();
         if (slice.length === 1) {
-          playOne(first, endPlayback);
+          const intro = buildLiaFoundIntro({
+            topicLabel: topic,
+            count: 1,
+          });
+          speak(intro, () =>
+            playOne(first, () => {
+              closing();
+            })
+          );
           return;
         }
 
-        const intro =
-          found.length > slice.length
-            ? `Encontrei ${found.length} resultados. Seguem as ${slice.length} primeiras.`
-            : `Encontrei ${found.length} notícias.`;
-
-        speak(intro, () => playSequential(slice, endPlayback));
+        const intro = buildLiaFoundIntro({
+          topicLabel: topic,
+          count: slice.length,
+        });
+        speak(intro, () =>
+          playSequential(slice, () => {
+            closing();
+          })
+        );
       }
     },
-    [cancelPlayback, endPlayback, newsItems, playOne, playSequential, speak]
+    [
+      cancelPlayback,
+      endPlayback,
+      newsItems,
+      playOne,
+      playSequential,
+      speak,
+      tenant.name,
+    ]
   );
 
   const handleUtterance = useCallback(
@@ -206,7 +257,6 @@ export function CityExperience({ tenant, newsItems }: CityExperienceProps) {
     []
   );
 
-  // Microfone só enquanto o usuário manteve a sessão armada e a LIA não está falando.
   const voiceEnabled = sessionArmed && !playing;
 
   const { status: voiceStatus, stop: stopListening } = useVoiceUtterance({
@@ -219,18 +269,37 @@ export function CityExperience({ tenant, newsItems }: CityExperienceProps) {
   const listening = voiceStatus === "listening";
   const orbVisualState = orbStateFromVoice(listening, playing);
 
+  const afterIntroCaption =
+    "Diga a categoria: saúde, obras, educação, esportes, cultura ou “últimas notícias”.";
+
   const onArmSession = useCallback(() => {
     cancelPlayback();
     setSessionArmed(true);
     setPlaying(true);
     setCaptionText("Um momento…");
-    speak(buildLiaIntroScript(newsItems, tenant.name), () => {
-      setPlaying(false);
-      setCaptionText(
-        "Diga o tema: saúde, obras, educação, esportes, cultura, ou “últimas notícias”."
-      );
+    const fallback = buildIngestGreetingScript(newsItems, tenant.name, {
+      at: new Date(),
     });
-  }, [cancelPlayback, newsItems, speak, tenant.name]);
+    const url = greetingAudioUrl?.trim();
+    if (url) {
+      playUrl(url, fallback, () => {
+        setPlaying(false);
+        setCaptionText(afterIntroCaption);
+      });
+    } else {
+      speak(fallback, () => {
+        setPlaying(false);
+        setCaptionText(afterIntroCaption);
+      });
+    }
+  }, [
+    cancelPlayback,
+    greetingAudioUrl,
+    newsItems,
+    playUrl,
+    speak,
+    tenant.name,
+  ]);
 
   const onCancelListening = useCallback(() => {
     cancelPlayback();
@@ -254,6 +323,7 @@ export function CityExperience({ tenant, newsItems }: CityExperienceProps) {
           LexGov News
         </motion.p>
         <motion.h1
+          id="lia-experience-title"
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           transition={{ delay: 0.06 }}
@@ -261,12 +331,19 @@ export function CityExperience({ tenant, newsItems }: CityExperienceProps) {
         >
           Comunicação Inteligente para o Cidadão
         </motion.h1>
-        <p className="mt-1.5 text-[12px] font-normal text-neutral-500 sm:text-sm">
+        <p className="mt-1.5 text-[12px] font-normal text-neutral-400 sm:text-sm">
           {tenant.name}
         </p>
       </header>
 
-      <main className="pointer-events-none flex min-h-0 flex-1 flex-col items-center justify-center px-3 py-2">
+      <VoiceBrowserHint />
+
+      <main
+        id="lia-experience-main"
+        className="pointer-events-none flex min-h-0 flex-1 flex-col items-center justify-center px-3 py-2"
+        aria-labelledby="lia-experience-title"
+        role="region"
+      >
         <AnimatePresence mode="wait">
           <motion.div
             key={`${tenant.slug}-${orbHue}-${reflectionUrl ?? "none"}`}
@@ -292,6 +369,7 @@ export function CityExperience({ tenant, newsItems }: CityExperienceProps) {
             <button
               type="button"
               onClick={onArmSession}
+              aria-describedby="lia-captions"
               className="rounded-full border border-white/25 bg-white/10 px-6 py-2.5 text-xs font-medium text-white backdrop-blur-sm transition-colors hover:bg-white/15 focus:outline-none focus-visible:ring-2 focus-visible:ring-white/80 focus-visible:ring-offset-2 focus-visible:ring-offset-black sm:text-sm"
             >
               Falar com a LIA
@@ -301,7 +379,8 @@ export function CityExperience({ tenant, newsItems }: CityExperienceProps) {
             <button
               type="button"
               onClick={onCancelListening}
-              className="text-[11px] text-white/50 underline-offset-2 hover:text-white/75 hover:underline sm:text-xs"
+              aria-label="Cancelar escuta do microfone"
+              className="text-[11px] text-white/55 underline-offset-2 hover:text-white/85 hover:underline focus:outline-none focus-visible:ring-2 focus-visible:ring-white/60 focus-visible:ring-offset-2 focus-visible:ring-offset-black sm:text-xs"
             >
               Cancelar escuta
             </button>

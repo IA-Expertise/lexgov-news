@@ -22,7 +22,7 @@ export async function sendIntermediaryMessage(
     return {
       ok: false,
       error:
-        "Configure GEMINI_API_KEY no ambiente do servidor para usar o intermediário.",
+        "Configure GEMINI_API_KEY (ou AI_INTEGRATIONS_GEMINI_API_KEY) no servidor para usar o intermediário.",
     };
   }
 

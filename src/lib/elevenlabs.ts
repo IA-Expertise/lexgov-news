@@ -9,7 +9,7 @@ export function isElevenLabsConfigured(): boolean {
   return Boolean(process.env.ELEVENLABS_API_KEY?.trim());
 }
 
-/** Texto limitado para controlar custo; modelo multilingual suporta PT-BR */
+/** Texto limitado para controlar custo. Flash v2.5: baixa latência, multilíngue (inclui PT-BR). */
 const MAX_CHARS = 4_500;
 
 export async function textToSpeechMp3(
@@ -23,7 +23,7 @@ export async function textToSpeechMp3(
   if (!trimmed.length) throw new Error("Texto vazio para TTS");
 
   const modelId =
-    process.env.ELEVENLABS_MODEL_ID?.trim() || "eleven_multilingual_v2";
+    process.env.ELEVENLABS_MODEL_ID?.trim() || "eleven_flash_v2_5";
 
   const res = await fetch(`${API}/text-to-speech/${encodeURIComponent(voiceId)}`, {
     method: "POST",

@@ -1,14 +1,19 @@
 import { NextRequest, NextResponse } from "next/server";
 import { tenants } from "@/config/tenants";
 import { attachTtsToArticleIfPossible } from "@/lib/ingestElevenlabs";
+import { generateGreetingAudioForTenant } from "@/lib/liaGreetingIngest";
 import { generateTop3Audio } from "@/lib/top3Audio";
 import { prisma } from "@/lib/prisma";
+import { getGeminiApiKey } from "@/lib/geminiEnv";
+import { classifyNewsCategoryForIngest } from "@/lib/geminiCategoryClassifier";
 import { fetchRssItems } from "@/lib/rssIngest";
 
 /**
  * POST /api/ingest
  * Header: Authorization: Bearer <INGEST_SECRET>
- * Body opcional: { "tenantSlug": "louveira" } — omite para todos os tenants.
+ * Body opcional: { "tenantSlug": "louveira", "forceTts": true, "useGeminiCategory": true }
+ * — `useGeminiCategory` força classificação Gemini por item (requer GEMINI_API_KEY).
+ * — `INGEST_USE_GEMINI_CATEGORY=true` liga o mesmo comportamento por padrão.
  *
  * Busca RSS de cada cidade, faz upsert por sourceUrl e grava no PostgreSQL.
  * O campo `summary` pode vir enriquecido (HTML da matéria em louveira.sp.gov.br/conteudo/…)
@@ -36,13 +41,27 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  let body: { tenantSlug?: string; forceTts?: boolean } = {};
+  let body: {
+    tenantSlug?: string;
+    forceTts?: boolean;
+    useGeminiCategory?: boolean;
+  } = {};
   try {
     const t = await request.text();
-    if (t) body = JSON.parse(t) as { tenantSlug?: string; forceTts?: boolean };
+    if (t)
+      body = JSON.parse(t) as {
+        tenantSlug?: string;
+        forceTts?: boolean;
+        useGeminiCategory?: boolean;
+      };
   } catch {
     body = {};
   }
+
+  const useGeminiCategory =
+    body.useGeminiCategory === true ||
+    (process.env.INGEST_USE_GEMINI_CATEGORY === "true" &&
+      Boolean(getGeminiApiKey()));
 
   const list = body.tenantSlug
     ? Object.values(tenants).filter((x) => x.slug === body.tenantSlug)
@@ -54,11 +73,14 @@ export async function POST(request: NextRequest) {
     let n = 0;
     const items = await fetchRssItems(tenant.rssUrl);
     for (const item of items.slice(0, 40)) {
+      const category = await classifyNewsCategoryForIngest(item.title, item.summary, {
+        useGemini: useGeminiCategory,
+      });
       const row = await prisma.newsArticle.upsert({
         where: { sourceUrl: item.sourceUrl },
         create: {
           tenantSlug: tenant.slug,
-          category: item.category,
+          category,
           title: item.title,
           summary: item.summary,
           imageUrl: item.imageUrl,
@@ -69,7 +91,7 @@ export async function POST(request: NextRequest) {
           title: item.title,
           summary: item.summary,
           imageUrl: item.imageUrl,
-          category: item.category,
+          category,
           publishedAt: item.publishedAt,
         },
       });
@@ -86,6 +108,9 @@ export async function POST(request: NextRequest) {
     // Regrava o áudio da lista top-3 sempre que o ingest roda
     await generateTop3Audio(tenant).catch((e) =>
       console.error("[ingest top3]", e)
+    );
+    await generateGreetingAudioForTenant(tenant).catch((e) =>
+      console.error("[ingest greeting]", e)
     );
   }
 

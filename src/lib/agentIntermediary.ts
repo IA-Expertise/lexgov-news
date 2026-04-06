@@ -4,6 +4,11 @@ import {
 } from "@google/genai";
 import type { Content, ToolListUnion } from "@google/genai";
 import { fetchNewsForAgent } from "@/lib/agentNewsData";
+import {
+  getGeminiApiKey,
+  getGeminiBaseUrl,
+  getGeminiModel,
+} from "@/lib/geminiEnv";
 
 export type IntermediaryTurn = { role: "user" | "model"; text: string };
 
@@ -18,12 +23,10 @@ Quando precisar de dados atualizados de notícias, use a ferramenta listar_notic
 Se a lista vier vazia, diga que não encontrou resultados para o filtro e sugira outro termo.
 Não invente fatos além do que vier da ferramenta.`;
 
-export function isGeminiConfigured(): boolean {
-  return Boolean(process.env.AI_INTEGRATIONS_GEMINI_API_KEY?.trim());
-}
+export { isGeminiConfigured } from "@/lib/geminiEnv";
 
 function defaultModel(): string {
-  return "gemini-2.5-flash";
+  return getGeminiModel();
 }
 
 function turnsToContents(turns: IntermediaryTurn[]): Content[] {
@@ -38,8 +41,8 @@ export async function runIntermediaryChat(input: {
   message: string;
   history?: IntermediaryTurn[];
 }): Promise<IntermediaryResult> {
-  const apiKey = process.env.AI_INTEGRATIONS_GEMINI_API_KEY?.trim();
-  const baseUrl = process.env.AI_INTEGRATIONS_GEMINI_BASE_URL?.trim();
+  const apiKey = getGeminiApiKey();
+  const baseUrl = getGeminiBaseUrl();
 
   if (!apiKey) {
     throw new Error("Integração Gemini não configurada");

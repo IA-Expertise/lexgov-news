@@ -16,7 +16,8 @@ const FETCH_HEADERS = {
   Accept: "text/html,application/xhtml+xml",
 };
 
-function inferCategory(title: string, body: string): NewsCategory {
+/** Heurística local — fallback quando Gemini não está ativo ou falha. */
+export function inferCategoryHeuristic(title: string, body: string): NewsCategory {
   const t = `${title} ${body}`.toLowerCase();
   if (/(saúde|saude|hospital|vacina|dengue|posto|ubs)/.test(t)) return "saude";
   if (/(obra|paviment|drenagem|via|infra|constru)/.test(t)) return "obras";
@@ -166,7 +167,7 @@ export async function fetchRssItems(rssUrl: string): Promise<ParsedRssItem[]> {
     }
 
     const imageUrl = firstImageFromItem(item);
-    const category = inferCategory(title, summary);
+    const category = inferCategoryHeuristic(title, summary);
     const publishedAt = item.pubDate ? new Date(item.pubDate) : null;
 
     out.push({

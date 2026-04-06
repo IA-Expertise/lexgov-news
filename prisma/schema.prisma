@@ -24,3 +24,13 @@ model NewsArticle {
   @@index([tenantSlug])
   @@map("news_articles")
 }
+
+/// Metadados LIA por cidade (ex.: MP3 de menu/saudação gerado na ingestão).
+model TenantLiaAsset {
+  tenantSlug       String   @id
+  /// Ex.: /audio/louveira/greeting.mp3
+  greetingAudioUrl String   @default("")
+  updatedAt        DateTime @updatedAt
+
+  @@map("tenant_lia_assets")
+}

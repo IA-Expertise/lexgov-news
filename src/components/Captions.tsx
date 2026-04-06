@@ -5,17 +5,25 @@ import { motion, AnimatePresence } from "framer-motion";
 type CaptionsProps = {
   text: string;
   className?: string;
+  /** Ancorar `aria-describedby` do fluxo principal. */
+  id?: string;
 };
 
-export function Captions({ text, className = "" }: CaptionsProps) {
+export function Captions({
+  text,
+  className = "",
+  id = "lia-captions",
+}: CaptionsProps) {
   const words = text.trim().length ? text.trim().split(/\s+/) : [];
   const short = words.length <= 14;
 
   return (
     <div
-      className={`mx-auto max-w-[min(100%,19rem)] px-3 text-center font-sans text-[12px] font-normal leading-snug tracking-tight text-white/88 sm:max-w-sm sm:text-[13px] sm:leading-relaxed ${className}`}
+      id={id}
+      className={`mx-auto max-w-[min(100%,19rem)] px-3 text-center font-sans text-[12px] font-normal leading-snug tracking-tight text-neutral-100 sm:max-w-sm sm:text-[13px] sm:leading-relaxed ${className}`}
       role="status"
       aria-live="polite"
+      aria-atomic="true"
     >
       <AnimatePresence mode="wait">
         <motion.p
