@@ -23,15 +23,6 @@ export const tenants: Record<string, TenantConfig> = {
     /** Feed rss.app filtrado — só notícias do portal da prefeitura (louveira.sp.gov.br) */
     rssUrl: "https://rss.app/feeds/Td6Rdgydp13qn427.xml",
   },
-  vinhedo: {
-    id: "vinhedo",
-    slug: "vinhedo",
-    name: "Vinhedo",
-    primaryColor: "#008000",
-    secondaryColor: "#90EE90",
-    voiceId: "Sarah",
-    rssUrl: "https://vinhedo.sp.gov.br/rss.xml",
-  },
 };
 
 export function getTenantBySlug(slug: string): TenantConfig | undefined {
